@@ -84,6 +84,53 @@ Register a service with `kind: "model_provider"` and expose the `models` and `ge
 
 All services on this local socket are trusted. If multiple model providers can serve an agent, each selected provider can receive the agent's recent transcript. Pin the provider to restrict where that transcript goes.
 
+## Bootstrap development inside GlassMoon
+
+Agent state keeps the full transcript in SQLite and a separate summary of older complete turns. Agents compact automatically when their unsummarized transcript grows. Use the `compact` RPC to request it explicitly or `info` to inspect the covered revision.
+
+```sh
+uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call agent.moon compact
+```
+
+### Publish Python tools and connect MCP servers
+
+Start each publisher in a separate terminal. The Python file exports a `TOOLS` mapping with a description, JSON Schema, and a synchronous or asynchronous handler for each function. The MCP bridge keeps one initialized session open and publishes its tool catalog through the same interface.
+
+```sh
+uv run --locked python -m glassmoon.toolbox --socket "$GLASSMOON_SOCKET" \
+  --name tools.moon examples/moon_tools.py
+uv run --locked python -m glassmoon.mcp_bridge --socket "$GLASSMOON_SOCKET" \
+  --name mcp.math -- "$PWD/.venv/bin/python" -m examples.math_mcp
+```
+
+For a Streamable HTTP MCP server, use `--url` in place of the local command. `--bearer-env` selects the environment variable holding its bearer token. For local stdio servers, `--pass-env NAME` forwards a named environment variable.
+
+Launch or replace an agent with `--tool-service tools.moon --tool-service mcp.math`. It discovers the current tools before each turn and sees them as `tools_moon__text_budget` and `mcp_math__multiply`. The same tools are callable from Python, including an agent's `python_eval`.
+
+```python
+import asyncio
+import os
+
+from glassmoon.toolbox import call_tool
+
+result = asyncio.run(call_tool(
+    os.environ["GLASSMOON_SOCKET"], "mcp.math", "multiply", {"a": 6, "b": 7}
+))
+print(result["structuredContent"]["result"])
+```
+
+### Supervise a local worker
+
+Moon wrote the `moon.text` example service, which fingerprints UTF-8 text and exposes a deterministic health probe. The supervisor starts a worker, validates probe fields, restarts it after repeated failures or process exit, and can send an incident to a named maintainer agent.
+
+```sh
+uv run --locked python -m glassmoon.supervisor --socket "$GLASSMOON_SOCKET" \
+  --service moon.text --expect '{"status":"ok","version":1}' --maintainer agent.moon \
+  -- "$PWD/.venv/bin/python" -m examples.moon_service --socket "$GLASSMOON_SOCKET"
+```
+
+Use a fresh service name or stop any existing worker before starting the supervisor. Recovery is bounded by the restart budget. The supervisor owns its child process group. A healthy probe after restart confirms the broker route is back. The maintainer receives the service name, probe failure, and restart status.
+
 ## Try the live service cutover
 
 You’ll need a Unix environment, a Rust toolchain with Cargo, and Python 3.11 or newer. Run these commands from the checkout.

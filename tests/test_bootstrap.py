@@ -83,8 +83,9 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             bridge = Bridge(
                 StdioServerParameters(command=sys.executable, args=["-I", str(module)])
             )
-            self.assertEqual(set(await bridge.tools()), {"add"})
-            answer = await bridge.invoke("add", {"a": 12, "b": 30})
+            async with bridge.client() as client:
+                self.assertEqual(set(await bridge.tools(client)), {"add"})
+                answer = await bridge.invoke(client, "add", {"a": 12, "b": 30})
             self.assertEqual(answer["structuredContent"]["result"], 42)
 
     async def test_agent_calls_discovered_tool(self):

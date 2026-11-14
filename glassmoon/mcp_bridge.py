@@ -28,17 +28,16 @@ class Bridge:
 
         @asynccontextmanager
         async def transport():
-            async with httpx2.AsyncClient(
-                headers=self.headers, timeout=MCP_TIMEOUT
-            ) as client, streamable_http_client(
-                self.target, http_client=client
-            ) as streams:
+            async with (
+                httpx2.AsyncClient(headers=self.headers, timeout=MCP_TIMEOUT) as client,
+                streamable_http_client(self.target, http_client=client) as streams,
+            ):
                 yield streams
 
         return Client(transport(), read_timeout_seconds=MCP_TIMEOUT)
 
-    async def tools(self):
-        async with asyncio.timeout(MCP_TIMEOUT), self.client() as client:
+    async def tools(self, client):
+        async with asyncio.timeout(MCP_TIMEOUT):
             cursor = None
             tools = {}
             for _ in range(32):
@@ -53,9 +52,9 @@ class Bridge:
                     return tools
         raise fail("mcp_catalog", "MCP tool catalog exceeds the page limit")
 
-    async def invoke(self, name, arguments):
+    async def invoke(self, client, name, arguments):
         try:
-            async with asyncio.timeout(MCP_TIMEOUT), self.client() as client:
+            async with asyncio.timeout(MCP_TIMEOUT):
                 result = await client.call_tool(name, arguments)
                 return result.model_dump(mode="json", by_alias=True, exclude_none=True)
         except TimeoutError:
@@ -89,9 +88,14 @@ async def run(args):
                 env=environment,
             )
         )
-    functions = await bridge.tools()
-    service = ToolService(functions, bridge.invoke)
-    await serve(args.socket, args.name, args.replace, METHODS, service.handle)
+    async with bridge.client() as client:
+        functions = await bridge.tools(client)
+
+        async def invoke(name, arguments):
+            return await bridge.invoke(client, name, arguments)
+
+        service = ToolService(functions, invoke)
+        await serve(args.socket, args.name, args.replace, METHODS, service.handle)
 
 
 def main():
