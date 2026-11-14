@@ -5,6 +5,7 @@ import base64
 import secrets
 from collections import deque
 from dataclasses import dataclass, field
+from time import monotonic
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error, async_playwright
@@ -148,6 +149,7 @@ class Window:
     page: object
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     diagnostics: deque = field(default_factory=lambda: deque(maxlen=24))
+    last_used: float = field(default_factory=monotonic)
 
     def listen(self):
         def record(kind, text):
@@ -171,12 +173,13 @@ class Window:
 
 
 class Browser:
-    def __init__(self, engine, browser, max_windows=8, publish=None, allowed_origins=()):
+    def __init__(self, engine, browser, max_windows=8, publish=None, allowed_origins=(), idle_seconds=None):
         self.engine = engine
         self.browser = browser
         self.max_windows = max_windows
         self.publish = publish
         self.allowed_origins = frozenset(origin(url, bare=True) for url in allowed_origins)
+        self.idle_seconds = idle_seconds
         self.windows = {}
         self.opening = asyncio.Lock()
 
@@ -221,12 +224,22 @@ class Browser:
             await context.unroute_all(behavior="ignoreErrors")
         await context.close()
 
+    async def expire_windows(self):
+        if self.idle_seconds is None:
+            return
+        cutoff = monotonic() - self.idle_seconds
+        for window in tuple(self.windows.values()):
+            if window.last_used <= cutoff and not window.lock.locked():
+                async with window.lock:
+                    await self.close_context(window.context)
+
     async def open(self, args):
         url = self.navigation_url(args["url"]) if args.get("url") else None
         viewport = {axis: args.get(axis, default) for axis, default in VIEWPORT.items()}
         if any(type(size) is not int or not 240 <= size <= 1600 for size in viewport.values()):
             raise fail("invalid_viewport", "Use a browser width and height between 240 and 1600 pixels")
         async with self.opening:
+            await self.expire_windows()
             if len(self.windows) >= self.max_windows:
                 raise fail("window_limit", "Close a window before opening another")
             context = await self.browser.new_context(
@@ -274,6 +287,7 @@ class Browser:
                 window = self.windows[handle]
                 page = window.page
                 async with window.lock:
+                    window.last_used = monotonic()
                     if page.is_closed():
                         raise fail("unknown_window", "The browser window is closed")
                     if action == "close":
@@ -306,9 +320,12 @@ class Browser:
                                 },
                             }
                         )
-                    if action == "actions":
-                        return await self.actions(page, args["steps"])
-                    return await self.page_action(action, page, args)
+                    try:
+                        if action == "actions":
+                            return await self.actions(page, args["steps"])
+                        return await self.page_action(action, page, args)
+                    finally:
+                        window.last_used = monotonic()
         except (TimeoutError, BrowserTimeout):
             raise fail(
                 "browser_timeout", f"Browser action {action} timed out"
@@ -507,6 +524,7 @@ async def run(args):
                 args.max_windows,
                 publish if args.evidence else None,
                 args.allow_origin,
+                args.idle_seconds,
             )
             tools = TOOLS | {"share": SHARE} if args.evidence else TOOLS
             service = ToolService(tools, worker.invoke)
@@ -538,11 +556,14 @@ def main():
         help="Limit browser HTTP requests to this origin. Repeat to allow multiple origins.",
     )
     parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
+    parser.add_argument("--idle-seconds", type=int, help="Close idle windows when opening another")
     args = parser.parse_args()
     if args.staged and args.replace is not None:
         parser.error("--staged and --replace cannot be used together")
     if not 1 <= args.max_windows <= 32:
         parser.error("--max-windows must be between 1 and 32")
+    if args.idle_seconds is not None and not 1 <= args.idle_seconds <= 86400:
+        parser.error("--idle-seconds must be between 1 and 86400")
     try:
         asyncio.run(run(args))
     except KeyboardInterrupt:

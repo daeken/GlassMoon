@@ -166,6 +166,8 @@ Screenshots use viewport coordinates and arrive as image tool results. The route
 
 Supply `width` and `height` to `open` to test a specific viewport. Each dimension accepts 240–1600 CSS pixels. Screenshots and coordinate clicks use the window's actual dimensions.
 
+For disposable browser workers, `--idle-seconds N` allows opening a new window to reclaim older idle windows. Windows with operations in progress remain available to those operations.
+
 ### Share a browser screenshot between agents
 
 Start a local visual evidence service with its own SQLite file. Pass `--evidence tools.evidence` when launching a browser worker, and add `--tool-service tools.evidence` to the receiving agent.

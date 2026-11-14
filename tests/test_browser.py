@@ -3,6 +3,7 @@ import base64
 import unittest
 from contextlib import suppress
 from pathlib import Path
+from time import monotonic
 
 from playwright.async_api import async_playwright
 
@@ -43,8 +44,23 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                     try:
                         await self.exercise_browser(Browser(engine, backend))
                         await self.exercise_allowed_origins(engine, backend)
+                        await self.exercise_expiring_windows(engine, backend)
                     finally:
                         await backend.close()
+
+    async def exercise_expiring_windows(self, engine, backend):
+        worker = Browser(engine, backend, max_windows=1, idle_seconds=10)
+        opened = await worker.invoke("open", {})
+        handle = opened["window"]
+        window = worker.windows[handle]
+        window.last_used = monotonic() - 11
+        async with window.lock:
+            with self.assertRaises(RequestError) as fullness:
+                await worker.invoke("open", {})
+            self.assertEqual(fullness.exception.code, "window_limit")
+        replacement = await worker.invoke("open", {})
+        self.assertNotIn(handle, worker.windows)
+        await worker.invoke("close", {"window": replacement["window"]})
 
     async def exercise_allowed_origins(self, engine, backend):
         unexpected = []
