@@ -48,7 +48,7 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory(prefix="gm-stack-", dir="/tmp") as root:
             processes = []
 
-            async def start(state):
+            async def start(state, *options):
                 process = await asyncio.create_subprocess_exec(
                     sys.executable,
                     "-m",
@@ -56,6 +56,7 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
                     "examples/offline-stack.toml",
                     "--state",
                     state,
+                    *options,
                     stdout=asyncio.subprocess.PIPE,
                 )
                 processes.append(process)
@@ -70,7 +71,15 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
                     first, a = await start(Path(root) / "a")
                     _, b = await start(Path(root) / "b")
                     self.assertNotEqual(a, b)
-                    await call_tool(
+                    duplicate = await asyncio.create_subprocess_exec(
+                        sys.executable, "-m", "glassmoon.stack", "examples/offline-stack.toml",
+                        "--state", Path(root) / "a", "--resume", stderr=asyncio.subprocess.PIPE,
+                    )
+                    processes.append(duplicate)
+                    _, detail = await duplicate.communicate()
+                    self.assertEqual(duplicate.returncode, 1)
+                    self.assertIn(b"already in use", detail)
+                    task = await call_tool(
                         a,
                         "tools.mailbox",
                         "submit",
@@ -81,6 +90,7 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
                             "task": "local only",
                         },
                     )
+                    await call(a, "agent.moon", "chat", {"text": "before resume"})
                     self.assertEqual(
                         (await call_tool(b, "tools.mailbox", "list_tasks", {}))[
                             "tasks"
@@ -90,6 +100,15 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
                     first.terminate()
                     self.assertEqual(await first.wait(), 0)
                     self.assertFalse(Path(a).exists())
+                    _, restored = await start(Path(root) / "a", "--resume")
+                    self.assertEqual(restored, a)
+                    self.assertEqual(
+                        (await call_tool(restored, "tools.mailbox", "get", {"id": task["id"]}))["status"],
+                        "queued",
+                    )
+                    history = await call(restored, "agent.moon", "history", {})
+                    self.assertEqual(history["revision"], 2)
+                    self.assertIn("before resume", json.dumps(history["messages"]))
                     async with connect(b) as wire:
                         self.assertEqual(
                             len(

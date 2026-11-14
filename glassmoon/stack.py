@@ -2,12 +2,13 @@
 
 import argparse
 import asyncio
+import fcntl
 import json
 import os
 import signal
 import sys
 import tomllib
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, contextmanager
 from pathlib import Path
 
 from .ipc import ProtocolError, RequestError, call, connect
@@ -64,17 +65,38 @@ def render(value, variables):
 
 
 class Stack:
-    def __init__(self, config, root, state, timeout):
+    def __init__(self, config, root, state, timeout, resume=False):
         self.config = config
         self.root = root
         self.state = state
         self.socket = state / "ipc"
         self.timeout = timeout
+        self.resume = resume
         self.variables = {
             "socket": str(self.socket),
             "state": str(state),
             "python": sys.executable,
         }
+
+    @contextmanager
+    def state_lock(self):
+        if not self.resume:
+            self.state.mkdir(mode=0o700, parents=False, exist_ok=False)
+        path = self.state / ".glassmoon-stack"
+        flags = os.O_RDWR | os.O_NOFOLLOW
+        if not self.resume:
+            flags |= os.O_CREAT | os.O_EXCL
+        with os.fdopen(os.open(path, flags, 0o600), "r+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError("This stack state is already in use") from None
+            if self.resume and lock.read() != str(self.root):
+                raise ValueError("Use the same working directory when resuming this stack")
+            if not self.resume:
+                lock.write(str(self.root))
+                lock.flush()
+            yield
 
     async def start_process(self, stack, name, command, extra=None, pass_env=()):
         env = {
@@ -125,6 +147,7 @@ class Stack:
                                     probe["method"],
                                     probe.get("params", {}),
                                     version=active["interface_version"],
+                                    generation=active["generation"],
                                 )
                                 if not isinstance(result, dict) or any(
                                     key not in result or result[key] != value
@@ -140,9 +163,8 @@ class Stack:
             )
 
     async def run(self, smoke):
-        # An existing directory may belong to another operator or stack.
-        self.state.mkdir(mode=0o700, parents=False, exist_ok=False)
         async with AsyncExitStack() as stack:
+            stack.enter_context(self.state_lock())
             processes = [
                 (
                     "broker",
@@ -219,7 +241,7 @@ def main():
         "--state",
         required=True,
         type=Path,
-        help="New local directory for the socket and logs",
+        help="Local directory for the socket, logs, and persisted state",
     )
     parser.add_argument(
         "--root", default=Path.cwd(), type=Path, help="Working directory for commands"
@@ -232,6 +254,9 @@ def main():
         action="store_true",
         help="Exit successfully after all readiness checks",
     )
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume a previously created stack directory"
+    )
     args = parser.parse_args()
     if not 0.1 <= args.timeout <= 120:
         parser.error("--timeout must be between 0.1 and 120 seconds")
@@ -239,7 +264,7 @@ def main():
         config = manifest(args.manifest)
         return asyncio.run(
             run(
-                Stack(config, args.root.resolve(), args.state.resolve(), args.timeout),
+                Stack(config, args.root.resolve(), args.state.resolve(), args.timeout, args.resume),
                 args.smoke,
             )
         )

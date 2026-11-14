@@ -13,7 +13,7 @@ uv run --locked python -m glassmoon.stack examples/offline-stack.toml \
   --state /tmp/glassmoon-my-test --smoke
 ```
 
-The launcher checks registration and configured readiness probes, logs each child, and cleans up its own process groups on exit. It requires a new state directory and forwards only the environment entries listed in the manifest or needed for local execution. Use trusted manifests and commands.
+The launcher checks registration and configured readiness probes, logs each child, and cleans up its own process groups on exit. Start with a new state directory. After stopping the stack, use `--resume` with the same state directory and working directory to preserve its tasks and conversations. The launcher forwards only the environment entries listed in the manifest or needed for local execution. Use trusted manifests and commands.
 
 ## Chat with an agent
 
