@@ -251,7 +251,7 @@ uv run --locked python -m glassmoon.release --socket "$GLASSMOON_SOCKET" GENERAT
 
 The release command sends the probe to the specified generation and compares the result before attempting activation. The broker checks that the active generation still matches the one observed before the probe. A failed probe leaves normal traffic on its current route. A draining generation can finish its existing calls.
 
-Add `--check-only` to run the probe while leaving the candidate staged. A later release probes it again before activation.
+Add `--check-only` to run the probe while leaving the candidate staged. The result identifies the checked generation and time, and includes a verified Python entry point digest when the probe reports one. A later release probes the candidate again before activation.
 Pass `--expected-active GENERATION` to require the active route you reviewed, or `0` to require an empty route.
 
 Shared tool workers expose `health` with `status` and their tool count. Agents report their identity and saved conversation revision. These probes check basic worker readiness. Use a service-specific probe when release depends on a downstream dependency.

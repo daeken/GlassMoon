@@ -3,6 +3,8 @@
 import argparse
 import asyncio
 import json
+import re
+import time
 
 from .ipc import ProtocolError, RequestError, call, connect
 from .service import fail
@@ -53,10 +55,14 @@ async def release(
                 f"Staged generation {generation} failed {service}.{probe}",
             )
         if check_only:
-            return {
+            checked = {
                 "name": service, "generation": generation, "previous": previous,
-                "probe": probe, "probe_passed": True,
+                "probe": probe, "probe_passed": True, "checked_at": time.time(),
             }
+            digest = result.get("source_sha256")
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
+                checked["source_sha256"] = digest
+            return checked
         return (
             await wire.request(
                 "activate",

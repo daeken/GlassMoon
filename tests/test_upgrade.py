@@ -320,6 +320,8 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
                 check_only=True, expected_active=previous,
             )
             self.assertTrue(checked["probe_passed"])
+            self.assertEqual(checked["generation"], generation)
+            self.assertGreater(checked["checked_at"], 0)
             async with connect(socket) as observer:
                 snapshot = (await observer.request("list", "after-probe"))["result"]["services"]
             self.assertEqual(
