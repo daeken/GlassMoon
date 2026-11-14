@@ -211,7 +211,7 @@ Use `/timeline ID` to see when the mailbox recorded claims, tool events, replies
 
 An agent can set `parent` to the current task ID when it submits a handoff. `/children ID` lists those related tasks, and a child's `/task ID` view shows its parent. Each task retains its own reply and review state.
 
-Use `/review` for tasks that need a decision. `/review PARENT` shows only the children of that task that are awaiting review.
+Use `/review` for tasks that need a decision. `/review PARENT` shows only the children of that task that are awaiting review. `/more-tasks` pages backward through your last task list with its filters intact.
 
 If a turn exhausts its tool budget after starting work, the agent saves a partial report in its transcript. The mailbox keeps that task in review so the operator can check the effects before retrying.
 

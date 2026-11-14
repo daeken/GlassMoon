@@ -46,6 +46,8 @@ class Terminal:
         self.history_page = {}
         self.command_history = []
         self.history_index = 0
+        self.task_page = None
+        self.task_list_lock = asyncio.Lock()
         self.dirty = True
 
     def log(self, window, text):
@@ -253,13 +255,20 @@ class Terminal:
         membership = "enabled" if service in updated["enabled"] else "disabled"
         self.log(window, f"{service} {membership} for new turns. Use /tools to check availability.")
 
-    async def list_tasks(self, agent=None, parent=None, status=None):
+    async def list_tasks(self, agent=None, parent=None, status=None, before=None):
+        async with self.task_list_lock:
+            await self.load_tasks(agent, parent, status, before)
+
+    async def load_tasks(self, agent, parent, status, before):
         params = {"agent": agent} if agent else {}
         if parent is not None:
             params["parent"] = parent
         if status is not None:
             params["status"] = status
+        if before is not None:
+            params["before"] = before
         response = await call_tool(self.socket, self.mailbox, "list_tasks", params)
+        self.task_page = (agent, parent, status, response["before"])
         if not response["tasks"]:
             self.log("status", "No tasks need review." if status == "review" else "No tasks.")
         for row in response["tasks"]:
@@ -272,6 +281,19 @@ class Terminal:
                 "status",
                 f"{row['id']}  {state}  {row['sender']} → {row['agent']}  {row['key']}  attempts {row['attempts']}",
             )
+        if response["before"] is not None:
+            self.log("status", "Use /more-tasks to see older matching tasks.")
+
+    async def more_tasks(self):
+        async with self.task_list_lock:
+            if self.task_page is None:
+                self.log("status", "Open a task list with /tasks, /children, or /review first.")
+                return
+            agent, parent, status, before = self.task_page
+            if before is None:
+                self.log("status", "Reached the end of this task list.")
+                return
+            await self.load_tasks(agent, parent, status, before)
 
     async def review_queue(self, parent):
         await self.list_tasks(parent=parent or None, status="review")
@@ -435,6 +457,7 @@ class Terminal:
                     self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
                     self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
+                    self.log(self.active, "/more-tasks pages through your last task list")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                 case "/status":
@@ -460,6 +483,9 @@ class Terminal:
                 case "/review":
                     self.select("status")
                     self.start(lambda: self.review_queue(argument))
+                case "/more-tasks":
+                    self.select("status")
+                    self.start(self.more_tasks)
                 case "/queue" | "/queue-check" if " " in argument:
                     agent, _, body = argument.partition(" ")
                     recovery = None

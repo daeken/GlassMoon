@@ -14,6 +14,7 @@ from glassmoon.dispatcher import Dispatch
 from glassmoon.ipc import RequestError
 from glassmoon.mailbox import Mailbox, MailboxService
 from glassmoon.models import Transcripts, encoded_size
+from glassmoon.tui import Terminal
 
 TASK = {"sender": "moon", "agent": "tide", "key": "check", "task": "Check the fixture."}
 
@@ -430,3 +431,24 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             [row["id"] for row in self.rpc("list_tasks", parent=parent["id"])["tasks"]],
             [child["id"]],
         )
+
+    async def test_terminal_paginates_the_same_filtered_review_queue(self):
+        parent = self.rpc("submit", **TASK)
+        ids = []
+        for index in range(23):
+            args = TASK | {"key": f"review-{index}", "agent": "finch"}
+            task = self.rpc("submit", **args, parent=parent["id"])
+            ids.append(task["id"])
+            self.rpc("claim", agent="finch", lease_seconds=1)
+        self.now += 2
+        self.rpc("submit", **(TASK | {"key": "still-queued"}), parent=parent["id"])
+
+        async def route(_socket, _service, method, fields):
+            return self.rpc(method, **fields)
+
+        terminal = Terminal(None, "unused")
+        with patch("glassmoon.tui.call_tool", side_effect=route):
+            await terminal.review_queue(parent["id"])
+            await asyncio.gather(terminal.more_tasks(), terminal.more_tasks())
+        observed = [line.split()[0] for line in terminal.windows["status"] if "outcome unknown" in line]
+        self.assertEqual(observed, list(reversed(ids)))
