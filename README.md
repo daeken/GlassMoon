@@ -45,6 +45,8 @@ Each agent saves its transcript in a local SQLite database keyed by name. `--sta
 
 Use `/older` in an agent's TUI window to page backward through its saved conversation. `/latest` returns to the live chat. `/memory` shows the saved summary and the most recent revision it covers.
 
+Use `/saved` to open the latest stored transcript page, including replies to mailbox tasks completed since you opened the chat. Then `/older` continues from that page and `/latest` returns to the live view.
+
 Use `/find TEXT` to search saved messages, including those already summarized. Run `/find` again to see earlier matches and `/latest` to return to the live chat.
 
 ### Use your ChatGPT plan

@@ -223,6 +223,18 @@ class Terminal:
                 self.scroll_to_top = False
             self.dirty = True
 
+    async def saved_history(self, window):
+        await self.query(window)
+        async with self.history_loading[window]:
+            entries, before = await self.load_history(window, {})
+            self.search_page.pop(window, None)
+            self.history_page[window] = entries or ["The agent has no saved messages yet."]
+            self.history_before[window] = before
+            if self.active == window:
+                self.scroll = 0
+                self.scroll_to_top = False
+            self.dirty = True
+
     def leave_history(self, window):
         if window in self.latest_before:
             self.history_before[window] = self.latest_before[window]
@@ -736,7 +748,7 @@ class Terminal:
         if text.startswith("/") and not text.startswith("//"):
             command, _, argument = text.partition(" ")
             argument = argument.strip()
-            if command not in {"/find", "/older", "/latest", "/status", "/query"}:
+            if command not in {"/find", "/older", "/latest", "/saved", "/status", "/query"}:
                 self.leave_history(self.active)
             match command:
                 case "/quit":
@@ -772,6 +784,7 @@ class Terminal:
                     self.log(self.active, "/describe-tool SERVICE TOOL shows the tool's inputs")
                     self.log(self.active, "/model [auto|default|PROVIDER[/MODEL]] in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
+                    self.log(self.active, "/saved shows the newest stored messages, including queued work")
                     self.log(self.active, "/memory shows the saved conversation summary")
                     self.log(self.active, "/find TEXT searches saved messages. /find pages earlier.")
                 case "/status":
@@ -794,6 +807,9 @@ class Terminal:
                 case "/latest" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.latest_history(window), window)
+                case "/saved" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.saved_history(window), window)
                 case "/tool" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.change_tool(window, argument), window)

@@ -201,6 +201,11 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(terminal.history_before["moon"])
                 pages.append(terminal.history_page["moon"])
                 await terminal.latest_history("moon")
+                store.append("moon", 9, {"role": "assistant", "content": "A saved background reply"})
+                await terminal.saved_history("moon")
+                self.assertEqual(terminal.history_page["moon"][-1], "<moon> A saved background reply")
+                self.assertNotIn("<moon> A saved background reply", terminal.windows["moon"])
+                await terminal.latest_history("moon")
             self.assertNotIn("moon", terminal.history_page)
             self.assertEqual(list(terminal.windows["moon"]), pages[0])
             self.assertEqual(
