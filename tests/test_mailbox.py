@@ -107,6 +107,23 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await dispatcher.deliver())
         reply.assert_awaited_once()
 
+    async def test_dispatcher_includes_parent_and_linked_evidence_in_delivery(self):
+        parent = self.rpc("submit", **(TASK | {"agent": "moon", "key": "parent"}))
+        child = self.rpc("submit", **TASK, parent=parent["id"])
+        self.rpc("attach_evidence", id=child["id"], owner="moon", key="original-screenshot")
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+
+        async def route(method, fields):
+            return self.rpc(method, **fields)
+
+        reply = AsyncMock(return_value={"message": {"role": "assistant", "content": "Ready"}})
+        with patch.object(dispatcher, "rpc", side_effect=route), patch("glassmoon.dispatcher.call", reply):
+            outcome = await dispatcher.deliver(check_online=False)
+        self.assertEqual(outcome["status"], "done")
+        prompt = reply.await_args.args[3]["text"]
+        self.assertIn(parent["id"], prompt)
+        self.assertIn("moon/original-screenshot", prompt)
+
     async def test_cancelled_delivery_requires_review(self):
         task = self.rpc("submit", **TASK)
         dispatcher = Dispatch("", "tools.mailbox", "tide")

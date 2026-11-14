@@ -86,13 +86,22 @@ class Dispatch:
         )
         retry_note = task.get("review_note")
         retry_context = f"\nOperator's requeue note for this work: {retry_note}\n" if retry_note else ""
+        parent = task.get("parent")
+        parent_context = f"\nParent task: {parent}\n" if parent else ""
+        evidence = task.get("evidence", [])
+        evidence_context = (
+            "\nLinked evidence: " + ", ".join(
+                f"{item['owner']}/{item['key']}" + (f" (attempt {item['attempt']})" if "attempt" in item else "")
+                for item in evidence
+            ) + "\n" if evidence else ""
+        )
         message = (
             f"GlassMoon task {task['id']} assigned by {task['sender']} (attempt {task['attempts']}).\n\n"
             f"{task['task']}\n\n"
             "Perform the requested work within your configured tools and report what you verified. "
             "If you cannot complete it, describe the blocker and any effects already observed. "
             "When delegating from this task through the mailbox, set parent to its task ID."
-            f"{recovery_context}{retry_context}"
+            f"{parent_context}{evidence_context}{recovery_context}{retry_context}"
         )
         heartbeat = asyncio.create_task(self.heartbeat(lease))
         event_index = 0

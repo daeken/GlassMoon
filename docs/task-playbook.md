@@ -29,6 +29,8 @@ A timeout or worker exit does not prove that a tool had no effect. Ambiguous wor
 
 A requeue note is included in the recipient's next delivery. Use it to say what you verified and which actions still need to run.
 
+The delivery also includes its parent task ID and any evidence linked to the task when it was claimed. Refer to the original observation when asking another agent to review an earlier attempt.
+
 ## Recover a note after a lost acknowledgment
 
 Suppose Tide has write access to the disposable fixture at `/tmp/glassmoon-handoff/notes.sqlite`. Record the absolute database path, expected text, and effect key when assigning the work.
