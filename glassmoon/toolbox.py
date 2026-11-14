@@ -120,6 +120,14 @@ async def list_tools(socket, service):
     return response["tools"]
 
 
+async def inspect_tool(socket, service, name):
+    generation, tools = await tool_catalog(socket, service)
+    for definition in tools:
+        if definition["name"] == name:
+            return {"generation": generation, "tool": definition}
+    raise fail("unknown_tool", "This service does not export the requested function")
+
+
 async def tool_catalog(socket, service):
     response = await call(socket, service, "tools", {}, envelope=True)
     return response["generation"], response["result"]["tools"]

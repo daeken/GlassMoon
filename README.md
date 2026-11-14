@@ -132,6 +132,8 @@ Pass `--image-tool NAME` for an MCP function that returns images. The bridge exp
 
 An agent turn calls the same tool generation that described its tools. If a service changes during the turn, a stale call returns `tool_changed`. The next turn discovers the replacement's definitions.
 
+Use `/describe-tool SERVICE TOOL` to inspect one shared tool's inputs and the generation that advertised them.
+
 In an agent's TUI window, use `/tool enable SERVICE` or `/tool disable SERVICE` to change its shared tools for new turns. `/tool default SERVICE` restores the startup setting for that name. `/tools` reports the saved settings revision, availability, and the generation it probed. An enabled service can come online later. The agent stores these overrides in its own database, and changes can apply while its current turn finishes. Trusted broker clients can make the same revision-checked changes with `tool_policy` and `set_tool_policy`.
 
 Pass `--configurable-tool-service SERVICE` to let the agent manage that service with `configure_shared_tool`. Repeat the option for additional services. The tool shows the approved names and current revision, and applies changes on the next turn. Explicit operator settings take precedence. Removing a name from the approved list ends any agent override for that service while the name is absent.

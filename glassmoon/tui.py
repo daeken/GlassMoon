@@ -13,7 +13,7 @@ from datetime import datetime
 from .evidence import export_image
 from .ipc import ProtocolError, RequestError, call, connect
 from .models import result_text
-from .toolbox import call_tool
+from .toolbox import call_tool, inspect_tool
 
 
 def terminal_text(value):
@@ -252,6 +252,20 @@ class Terminal:
             self.log(
                 window, f"{tool['name']}{'  [image]' if tool['returns_image'] else ''}"
             )
+
+    async def describe_tool(self, argument):
+        parts = argument.split()
+        if len(parts) != 2:
+            self.log("status", "Usage /describe-tool SERVICE TOOL")
+            return
+        service, tool = parts
+        metadata = await inspect_tool(self.socket, service, tool)
+        definition = metadata["tool"]
+        self.log("status", f"{service} #{metadata['generation']}  {definition['name']}")
+        self.log("status", definition["description"])
+        self.log("status", json.dumps(definition["parameters"], ensure_ascii=False, indent=2))
+        if definition.get("returns_image"):
+            self.log("status", "Returns an image tool result.")
 
     async def change_tool(self, window, argument):
         parts = argument.split()
@@ -601,6 +615,7 @@ class Terminal:
                     self.log(self.active, "/more-tasks pages through your last task list")
                     self.log(self.active, "/maintain SERVICE[#GENERATION] TASK queues work for the maintainer")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
+                    self.log(self.active, "/describe-tool SERVICE TOOL shows the tool's inputs")
                     self.log(self.active, "/model [auto|default|PROVIDER[/MODEL]] in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                     self.log(self.active, "/memory shows the saved conversation summary")
@@ -694,6 +709,9 @@ class Terminal:
                 case "/describe" if argument:
                     self.select("status")
                     self.start(lambda: self.inspect(argument))
+                case "/describe-tool" if argument:
+                    self.select("status")
+                    self.start(lambda: self.describe_tool(argument))
                 case "/query" if argument:
                     window = argument.removeprefix("agent.")
                     if (
