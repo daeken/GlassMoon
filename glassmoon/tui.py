@@ -280,6 +280,8 @@ class Terminal:
         for line in dict.fromkeys((task["result"], task["review_note"])):
             if line:
                 self.log("status", line)
+        if task.get("result_truncated"):
+            self.log("status", "Result display shortened to fit the reply limit.")
         for event in task.get("progress", [])[-8:]:
             detail = {
                 "started": "started",

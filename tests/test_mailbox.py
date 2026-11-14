@@ -13,7 +13,7 @@ from glassmoon.agent import Agent
 from glassmoon.dispatcher import Dispatch
 from glassmoon.ipc import RequestError
 from glassmoon.mailbox import Mailbox, MailboxService
-from glassmoon.models import Transcripts
+from glassmoon.models import Transcripts, encoded_size
 
 TASK = {"sender": "moon", "agent": "tide", "key": "check", "task": "Check the fixture."}
 
@@ -392,3 +392,21 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(event["attempt"], event["kind"]) for event in events], expected)
         self.assertEqual(events[21]["phase"], "failed")
         self.assertNotIn("result", events[-1])
+
+    def test_get_keeps_escape_heavy_results_within_a_reply(self):
+        values = TASK | {"task": "A" + "\0" * 3999, "recovery_check": "A" + "\0" * 1199}
+        task = self.rpc("submit", **values)
+        lease = self.rpc("claim", agent="tide", lease_seconds=5)
+        for index in range(1, 65):
+            self.rpc(
+                "progress", id=task["id"], token=lease["token"], index=index,
+                name="x" * 96, phase="finished",
+            )
+        result = "A" + "\0" * 11999
+        reply = self.rpc("finish", id=task["id"], token=lease["token"], status="done", result=result)
+        self.assertTrue(reply["result_truncated"])
+        self.assertLessEqual(encoded_size(reply), 60 * 1024)
+        self.assertEqual(len(reply["progress"]), 64)
+        self.assertTrue(result.startswith(reply["result"]))
+        self.assertEqual(self.rpc("get", id=task["id"]), reply)
+        self.assertEqual(self.rpc("submit", **values), reply)

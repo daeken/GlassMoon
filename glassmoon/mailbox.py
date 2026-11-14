@@ -10,7 +10,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .ipc import ProtocolError, RequestError, call
-from .models import INTEGER, TEXT, result_text
+from .models import INTEGER, TEXT, encoded_size, result_text
 from .service import fail, serve, service_args
 from .toolbox import METHODS, ToolService, tool
 
@@ -203,7 +203,7 @@ class Mailbox:
                     "key_conflict",
                     "This sender and key already identify a different task",
                 )
-            return self.public(row)
+            return self.get(db, now, row["id"])
         identifier = uuid.uuid4().hex
         db.execute(
             """
@@ -228,6 +228,18 @@ class Mailbox:
             (id, row["attempts"]),
         ).fetchall()
         task["progress"] = [dict(event) for event in events]
+        if encoded_size(task) > 60 * 1024 and task["result"]:
+            original = task["result"]
+            task["result_truncated"] = True
+            lower, upper = 0, len(original)
+            while lower < upper:
+                middle = (lower + upper + 1) // 2
+                task["result"] = original[:middle]
+                if encoded_size(task) <= 60 * 1024:
+                    lower = middle
+                else:
+                    upper = middle - 1
+            task["result"] = original[:lower]
         return task
 
     def progress(self, db, now, id, token, index, name, phase):
