@@ -574,6 +574,16 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         observed = [line.split()[0] for line in terminal.windows["status"] if "outcome unknown" in line]
         self.assertEqual(observed, list(reversed(ids)))
 
+    async def test_terminal_task_detail_shows_assignee_and_current_lease(self):
+        task = self.rpc("submit", **TASK)
+        self.rpc("claim", agent="tide", lease_seconds=5)
+        terminal = Terminal(None, "unused")
+        with patch("glassmoon.tui.call_tool", AsyncMock(return_value=self.rpc("get", id=task["id"]))):
+            await terminal.show_task(task["id"])
+        lines = list(terminal.windows["status"])
+        self.assertTrue(any("moon → tide" in line and "attempts 1" in line for line in lines))
+        self.assertTrue(any("Current lease ends" in line for line in lines))
+
     async def test_terminal_watch_reports_changes_and_stops_at_review(self):
         states = [
             {"revision": 1, "attempts": 0, "status": "queued"},

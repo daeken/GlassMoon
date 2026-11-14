@@ -474,6 +474,11 @@ class Terminal:
         self.log(
             "status", f"{task['id']}  {task_state(task)}  revision {task['revision']}"
         )
+        created = datetime.fromtimestamp(task["created_at"]).strftime("%b %d %H:%M:%S")
+        self.log("status", f"{task['sender']} → {task['agent']} · queued {created} · attempts {task['attempts']}")
+        if task["lease_until"] is not None:
+            until = datetime.fromtimestamp(task["lease_until"]).strftime("%H:%M:%S")
+            self.log("status", f"Current lease ends at {until} local time.")
         self.log("status", task["task"])
         if task.get("parent"):
             self.log("status", f"Parent task {task['parent']}")
