@@ -38,7 +38,10 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             file = Path(directory, "note.txt")
             file.write_text("original")
             workspace = Workspace(directory, read_only=True)
-            self.assertEqual([item["name"] for item in workspace.definitions], ["list_files", "read_file"])
+            self.assertEqual(
+                [item["name"] for item in workspace.definitions],
+                ["list_files", "read_file", "find_in_file"],
+            )
             self.assertNotIn("error", await workspace.execute(tool("list_files", path=".")))
             read = await workspace.execute(tool("read_file", path=file.name))
             self.assertEqual(read["text"], "original")
@@ -47,6 +50,25 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(file.read_text(), "original")
             with self.assertRaises(ValueError):
                 Workspace(directory, python=True, read_only=True)
+
+    async def test_workspace_search_paginates_by_line_and_can_pin_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory, "note.txt")
+            file.write_text("skip\n" + "猫" * 220 + "needle\n" + "needle twice needle\n" * 12)
+            workspace = Workspace(directory, read_only=True)
+            args = {"path": file.name, "query": "needle"}
+            first = await workspace.execute(tool("find_in_file", **args))
+            self.assertEqual(first["matches"][0], {
+                "line": 2, "column": 221, "excerpt": "…" + "猫" * 40 + "needle",
+            })
+            self.assertEqual(len(first["matches"]), 12)
+            args |= {"after_line": first["next"], "revision": first["revision"]}
+            last = await workspace.execute(tool("find_in_file", **args))
+            self.assertEqual(last["matches"], [{"line": 14, "column": 1, "excerpt": "needle twice needle"}])
+            self.assertIsNone(last["next"])
+            file.write_text("needle\n")
+            stale = await workspace.execute(tool("find_in_file", **args))
+            self.assertEqual(stale["error"], "revision_changed")
 
     async def test_workspace_batch_edit_rolls_back_failed_match(self):
         with tempfile.TemporaryDirectory() as directory:

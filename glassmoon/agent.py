@@ -679,7 +679,7 @@ def main():
     )
     parser.add_argument(
         "--workspace-read-only", action="store_true",
-        help="Expose only the workspace directory listing and file reading tools",
+        help="Expose workspace directory listing, file reading, and search tools",
     )
     parser.add_argument(
         "--python-eval",

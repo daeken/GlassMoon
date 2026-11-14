@@ -31,6 +31,12 @@ TOOLS = {
         {"path": TEXT},
         {"offset": INTEGER},
     ),
+    "find_in_file": method(
+        "Find literal, case-sensitive text in one UTF-8 workspace file. "
+        "Returns matching line numbers, character columns, and excerpts. To continue, pass next as after_line and include revision.",
+        {"path": TEXT, "query": TEXT},
+        {"after_line": INTEGER, "revision": TEXT},
+    ),
     "write_file": method(
         "Create a UTF-8 file or replace it at the revision returned by read_file. "
         "Use an empty revision when creating a file. Its parent must exist.",
@@ -88,7 +94,7 @@ class Workspace:
             raise ValueError("Raw Python requires a writable workspace")
         self.socket = socket
         self.names = (
-            ["list_files", "read_file"] if read_only
+            ["list_files", "read_file", "find_in_file"] if read_only
             else [name for name in TOOLS if name != "python_eval" or python]
         )
         self.definitions = [
@@ -167,6 +173,29 @@ class Workspace:
             hashlib.sha256(data).hexdigest(),
             stat.S_IMODE(mode),
         )
+
+    def find_in_file(self, path, query, after_line=0, revision=None):
+        if not query or len(query) > 160 or "\n" in query or "\r" in query:
+            raise fail("invalid_query", "Use 1–160 characters on one line")
+        if after_line < 0:
+            raise fail("invalid_cursor", "Use the next line cursor returned by find_in_file")
+        text, current_revision, _ = self.read(path)
+        if revision is not None and revision != current_revision:
+            raise fail("revision_changed", "The file changed. Restart the search.")
+        matches = []
+        for number, line in enumerate(text.split("\n"), 1):
+            if number <= after_line:
+                continue
+            position = line.find(query)
+            if position == -1:
+                continue
+            if len(matches) == 12:
+                return {"matches": matches, "revision": current_revision, "next": matches[-1]["line"]}
+            start = max(0, position - 40)
+            end = min(len(line), position + max(90, len(query) + 40))
+            excerpt = ("…" if start else "") + line[start:end] + ("…" if end < len(line) else "")
+            matches.append({"line": number, "column": position + 1, "excerpt": excerpt})
+        return {"matches": matches, "revision": current_revision, "next": None}
 
     def update(self, name, params, path):
         revision = params["revision"]
@@ -320,6 +349,8 @@ class Workspace:
                 directory = self.path(params["path"], allow_root=True)
                 return self.list_files(directory, params.get("after", ""))
             path = self.path(params["path"])
+            if name == "find_in_file":
+                return self.find_in_file(path, params["query"], params.get("after_line", 0), params.get("revision"))
             if name == "read_file":
                 text, revision, _ = self.read(path)
                 offset = params.get("offset", 0)
