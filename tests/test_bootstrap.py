@@ -31,6 +31,38 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_manages_only_operator_approved_shared_tools(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {}, "", store, self_tools=["mcp.notes"])
+
+            async def configure(**params):
+                return await agent.execute(
+                    {"name": "configure_shared_tool", "arguments": json.dumps(params)}, {}
+                )
+
+            read = {"mode": "read", "expected_revision": 0, "service": ""}
+
+            async def catalog(_socket, service):
+                self.assertEqual(service, "mcp.notes")
+                return 15, [{"name": "read", "description": "Read local note", "parameters": {"type": "object"}}]
+
+            with patch("glassmoon.agent.tool_catalog", side_effect=catalog):
+                definitions, routes, _, _ = await agent.discover_tools(ignore, False)
+                self.assertEqual([item["name"] for item in definitions], ["configure_shared_tool"])
+                self.assertEqual(routes, {})
+                policy = (await configure(**read))["value"]
+                denied = await configure(service="desktop", mode="enable", expected_revision=policy["revision"])
+                self.assertEqual(denied["error"], "tool_policy_denied")
+                approved = await configure(service="mcp.notes", mode="enable", expected_revision=policy["revision"])
+                self.assertEqual(approved["value"]["enabled"], ["mcp.notes"])
+                self.assertEqual(routes, {})
+                definitions, routes, _, _ = await agent.discover_tools(ignore, False)
+                self.assertEqual(routes["mcp_notes__read"], ("mcp.notes", "read", 15))
+                await configure(service="mcp.notes", mode="default", expected_revision=1)
+                self.assertEqual((await configure(**read))["value"]["enabled"], [])
+
     async def test_model_preference_applies_after_current_turn_and_persists(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder, "agent.db")

@@ -20,7 +20,7 @@ from .models import (
     within_reply_limit,
 )
 from .service import fail, method, serve, service_args
-from .toolbox import call_tool, tool_catalog, validate_name
+from .toolbox import call_tool, tool, tool_catalog, validate_name
 from .workspace_tools import Workspace
 
 METHODS = {
@@ -60,6 +60,16 @@ TRANSCRIPT_BUDGET = 60 * 1024
 TOOL_BUDGET = 57 * 1024
 MAX_TOOL_ROUNDS = 6
 MAX_TOOL_CALLS = 16
+SELF_TOOL_POLICY = "configure_shared_tool"
+SELF_TOOL = tool(
+    "Inspect or change your shared tool policy for future turns. For mode=read, send empty service and expected_revision=0. "
+    "A change requires an approved service name and the current revision.",
+    {
+        "service": TEXT | {"description": "Empty when reading. Otherwise the service name."},
+        "mode": TEXT | {"enum": ["read", "enable", "disable", "default"]},
+        "expected_revision": INTEGER | {"description": "Current revision, or 0 when reading."},
+    },
+)
 
 
 def task_key(params):
@@ -106,6 +116,7 @@ class Agent:
         transcripts,
         workspace=None,
         tool_services=(),
+        self_tools=(),
     ):
         self.socket = socket
         self.identity = identity
@@ -116,6 +127,7 @@ class Agent:
         self.conversation = transcripts.create(identifier=identity)
         self.workspace = workspace
         self.tool_services = tuple(dict.fromkeys(tool_services))
+        self.self_tools = tuple(dict.fromkeys(self_tools))
 
     def model_preference(self, saved=None):
         if saved is None:
@@ -147,10 +159,25 @@ class Agent:
         )
         return {"revision": revision, "overrides": overrides, "enabled": enabled}
 
+    def set_tool_policy(self, params):
+        service, mode, expected = (
+            params["service"], params["mode"], params["expected_revision"]
+        )
+        if mode not in ("enable", "disable", "default"):
+            raise fail("invalid_tool_mode", "Choose enable, disable, or default")
+        if not isinstance(service, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,61}", service):
+            raise fail("invalid_tool_service", "Choose a service name that fits tool namespaces")
+        if type(expected) is not int or not 0 <= expected < 2**63 - 1:
+            raise fail("invalid_revision", "Expected a valid tool policy revision")
+        state = self.transcripts.set_tool_policy(self.conversation, expected, service, mode)
+        return self.tool_policy(state)
+
     async def discover_tools(self, emit, stream, policy=None):
         if policy is None:
             policy = self.tool_policy()
         definitions = list(self.workspace.definitions) if self.workspace else []
+        if self.self_tools:
+            definitions.append({"name": SELF_TOOL_POLICY, **SELF_TOOL})
         routes = {}
         images = set()
         status = {
@@ -216,6 +243,8 @@ class Agent:
         return definitions, routes, images, status
 
     async def execute(self, item, routes):
+        if self.self_tools and item["name"] == SELF_TOOL_POLICY:
+            return self.configure_shared_tool(item["arguments"])
         if item["name"] in routes:
             service, name, generation = routes[item["name"]]
             try:
@@ -240,6 +269,23 @@ class Agent:
             "error": "unknown_tool",
             "message": "This agent has no tool by that name",
         }
+
+    def configure_shared_tool(self, arguments):
+        try:
+            params = json.loads(arguments)
+            if not isinstance(params, dict):
+                raise fail("invalid_arguments", "Supply an object")
+            if params == {"mode": "read", "expected_revision": 0, "service": ""}:
+                return {"value": self.tool_policy() | {"allowed": list(self.self_tools)}}
+            if set(params) != {"service", "mode", "expected_revision"}:
+                raise fail("invalid_arguments", "Supply service, mode, and expected revision together")
+            if params["service"] not in self.self_tools:
+                raise fail("tool_policy_denied", "This service is outside the operator-approved list")
+            return {"value": self.set_tool_policy(params)}
+        except RequestError as error:
+            return {"error": error.code, "message": str(error)}
+        except (TypeError, ValueError):
+            return {"error": "invalid_arguments", "message": "Tool arguments must be a JSON object"}
 
     async def generate(self, history, user, emit, stream, summary="", *, requirements=None):
         definitions, routes, images, _ = await self.discover_tools(emit, stream)
@@ -423,23 +469,7 @@ class Agent:
         if name == "tool_policy":
             return self.tool_policy()
         if name == "set_tool_policy":
-            service, mode, expected = (
-                params["service"], params["mode"], params["expected_revision"]
-            )
-            if mode not in ("enable", "disable", "default"):
-                raise fail("invalid_tool_mode", "Choose enable, disable, or default")
-            if not isinstance(service, str) or not re.fullmatch(
-                r"[A-Za-z0-9_.-]{1,61}", service
-            ):
-                raise fail(
-                    "invalid_tool_service", "Choose a service name that fits tool namespaces"
-                )
-            if type(expected) is not int or not 0 <= expected < 2**63 - 1:
-                raise fail("invalid_revision", "Expected a valid tool policy revision")
-            state = self.transcripts.set_tool_policy(
-                self.conversation, expected, service, mode
-            )
-            return self.tool_policy(state)
+            return self.set_tool_policy(params)
         if name == "tool_status":
             policy = self.tool_policy()
             definitions, routes, images, status = await self.discover_tools(
@@ -573,6 +603,7 @@ async def run(args):
             if args.workspace
             else None,
             args.tool_service,
+            args.configurable_tool_service,
         )
         await serve(
             args.socket,
@@ -612,6 +643,10 @@ def main():
         action="append",
         default=[],
         help="Discover and call tools from a named broker service",
+    )
+    parser.add_argument(
+        "--configurable-tool-service", action="append", default=[],
+        help="Allow the agent to change its membership in this named tool service",
     )
     parser.add_argument(
         "--workspace", help="Directory where the agent can read and edit files"
