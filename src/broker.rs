@@ -24,6 +24,7 @@ struct Generation {
     interface: Interface,
     state: State,
     in_flight: usize,
+    activation_notice: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -146,7 +147,10 @@ impl Broker {
                 client.watching = true;
                 self.ok(peer, &id, self.snapshot());
             }
-            Command::Register { interface } => self.register(peer, &id, interface),
+            Command::Register {
+                interface,
+                activation_notice,
+            } => self.register(peer, &id, interface, activation_notice),
             Command::Promote { expected_active } => self.promote(peer, &id, peer, expected_active),
             Command::Activate {
                 generation,
@@ -176,7 +180,7 @@ impl Broker {
         }
     }
 
-    fn register(&mut self, peer: PeerId, id: &str, interface: Interface) {
+    fn register(&mut self, peer: PeerId, id: &str, interface: Interface, activation_notice: bool) {
         let client = self.peers.get_mut(&peer).unwrap();
         if client.registered {
             self.error(
@@ -211,6 +215,7 @@ impl Broker {
                 interface,
                 state: State::Staged,
                 in_flight: 0,
+                activation_notice,
             },
         );
         self.ok(peer, id, json!({ "generation": peer }));
@@ -260,6 +265,9 @@ impl Broker {
             id,
             json!({ "generation": peer, "previous": expected_active }),
         );
+        if self.generations[&peer].activation_notice {
+            self.send_message(peer, json!({ "type": "activated" }));
+        }
         self.publish("promoted", self.summary(peer));
         if let Some(old) = expected_active {
             self.publish("draining", self.summary(old));

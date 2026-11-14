@@ -189,7 +189,7 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             await old.send("complete", call_id=received["call_id"], status="ok", result={"version": "v1"})
             self.assertEqual((await client.receive())["result"], {"version": "v1"})
 
-    async def test_opt_in_worker_reconnects_after_broker_restart(self):
+    async def test_active_and_promoted_workers_reconnect_after_broker_restart(self):
         async with AsyncExitStack() as stack, asyncio.timeout(12):
             directory = stack.enter_context(TemporaryDirectory(prefix="gm-reconnect-", dir="/tmp"))
             socket = Path(directory, "ipc")
@@ -225,13 +225,48 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             stack.push_async_callback(stop_worker)
             await ready.wait()
             self.assertEqual(await call(socket, "echo", "echo", {}), {"starts": 1})
+            staged_ready = asyncio.Event()
+            staged_worker = asyncio.create_task(serve(
+                socket, "staged.echo", None, METHODS, handler,
+                on_ready=staged_ready.set, reconnect=True, staged=True,
+            ))
+
+            async def stop_staged():
+                staged_worker.cancel()
+                await asyncio.gather(staged_worker, return_exceptions=True)
+
+            stack.push_async_callback(stop_staged)
+            await staged_ready.wait()
             async with connect(socket) as wire:
-                generation = (await wire.request("list", "list"))["result"]["services"][0]["generation"]
+                before = (await wire.request("list", "list"))["result"]["services"]
+            generation = next(row["generation"] for row in before if row["name"] == "echo")
+            staged_generation = next(
+                row["generation"] for row in before if row["name"] == "staged.echo"
+            )
+            await release(socket, staged_generation, "echo", {}, {"starts": 1})
+            self.assertEqual(await call(socket, "staged.echo", "echo", {}), {"starts": 1})
+            pending_ready = asyncio.Event()
+            pending = asyncio.create_task(serve(
+                socket, "pending.echo", None, METHODS, handler,
+                on_ready=pending_ready.set, reconnect=True, staged=True,
+            ))
+
+            async def stop_pending():
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+
+            stack.push_async_callback(stop_pending)
+            await pending_ready.wait()
             ready.clear()
+            staged_ready.clear()
             await self.stop_process(first)
             await broker()
+            with self.assertRaises((EOFError, OSError)):
+                await pending
             await ready.wait()
+            await staged_ready.wait()
             self.assertEqual(await call(socket, "echo", "echo", {}), {"starts": 2})
+            self.assertEqual(await call(socket, "staged.echo", "echo", {}), {"starts": 2})
             with self.assertRaises(RequestError) as stale:
                 await call(socket, "echo", "echo", {}, generation=generation)
             self.assertEqual(stale.exception.code, "generation_unavailable")

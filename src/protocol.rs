@@ -47,6 +47,8 @@ pub enum Command {
     Register {
         #[serde(flatten)]
         interface: Interface,
+        #[serde(default)]
+        activation_notice: bool,
     },
     Promote {
         expected_active: Option<u64>,

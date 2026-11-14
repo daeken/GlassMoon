@@ -79,12 +79,17 @@ async def serve(
     delay = 0.2
     while True:
         ready = False
+        active = False
 
         def registered():
             nonlocal ready
             ready = True
             if on_ready is not None:
                 on_ready()
+
+        def set_active(value):
+            nonlocal active
+            active = value
 
         try:
             return await _serve_connection(
@@ -96,22 +101,24 @@ async def serve(
                 kind=kind,
                 on_ready=registered,
                 staged=staged,
+                set_active=set_active,
             )
         except (EOFError, OSError):
-            if not reconnect or staged or not (ready or replace is None):
+            if not reconnect or (not active and (ready or staged or replace is not None)):
                 raise
-            if ready:
+            if active:
                 LOGGER.warning(
                     "%s lost its broker connection; waiting to register again", name
                 )
                 replace = None
+                staged = False
                 delay = 0.2
             await asyncio.sleep(delay)
             delay = min(delay * 2, 5)
 
 
 async def _serve_connection(
-    socket, name, replace, methods, handler, *, kind, on_ready, staged
+    socket, name, replace, methods, handler, *, kind, on_ready, staged, set_active
 ):
     async with connect(socket) as wire:
         registration = await wire.request(
@@ -121,9 +128,11 @@ async def _serve_connection(
             interface_version=1,
             methods=methods,
             kind=kind,
+            activation_notice=staged,
         )
         if not staged:
             await wire.request("promote", "promote", expected_active=replace)
+            set_active(True)
         state = "staged" if staged else "active"
         print(
             f"{name} {state} as generation {registration['result']['generation']}",
@@ -141,8 +150,10 @@ async def _serve_connection(
                             task = group.create_task(invoke(wire, message, handler))
                             tasks.add(task)
                             task.add_done_callback(tasks.discard)
+                        case "activated":
+                            set_active(True)
                         case "draining":
-                            continue
+                            set_active(False)
                         case "retire":
                             return
                         case unknown:
