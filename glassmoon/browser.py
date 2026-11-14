@@ -101,6 +101,11 @@ SHARE = tool(
     "Explicitly publish this viewport screenshot and a short reproduction summary. Include no secrets. Returns a share key.",
     WINDOW | {"owner": TEXT, "key": TEXT, "summary": TEXT},
 )
+SHARE_CHECKED = tool(
+    "Publish a screenshot after checking exact visible text in one CSS-matched element. "
+    "Includes the observed text and check time in the evidence. Share non-sensitive fixture text only.",
+    WINDOW | {"owner": TEXT, "key": TEXT, "summary": TEXT, "selector": TEXT, "expected": TEXT},
+)
 
 
 def web_url(value):
@@ -300,32 +305,9 @@ class Browser:
                         return {"closed": handle}
                     if action == "diagnostics":
                         return {"events": list(window.diagnostics)}
-                    if action == "share":
-                        if self.publish is None:
-                            raise fail(
-                                "sharing_unavailable",
-                                "No evidence service is configured",
-                            )
-                        shot = await self.page_action("screenshot", page, {})
-                        kinds = {}
-                        for event in window.diagnostics:
-                            kind = event["kind"]
-                            kinds[kind] = kinds.get(kind, 0) + 1
-                        return await self.publish(
-                            {
-                                "owner": args["owner"],
-                                "key": args["key"],
-                                "summary": args["summary"],
-                                "image": shot["image"],
-                                "metadata": {
-                                    "engine": self.engine,
-                                    "width": shot["width"],
-                                    "height": shot["height"],
-                                    "diagnostic_counts": kinds,
-                                },
-                            }
-                        )
                     try:
+                        if action in ("share", "share_checked"):
+                            return await self.share(window, args, checked=action == "share_checked")
                         if action == "actions":
                             return await self.actions(page, args["steps"])
                         return await self.page_action(action, page, args)
@@ -338,6 +320,52 @@ class Browser:
         except Error:
             # Browser error strings can contain page content or evaluated source.
             raise fail("browser_error", f"Browser action {action} failed") from None
+
+    async def share(self, window, args, *, checked):
+        if self.publish is None:
+            raise fail("sharing_unavailable", "No evidence service is configured")
+        page = window.page
+        if checked:
+            selector, expected = args["selector"], args["expected"]
+            if not isinstance(selector, str) or not 1 <= len(selector.encode()) <= 300:
+                raise fail("invalid_selector", "Use a CSS selector of 1–300 UTF-8 bytes")
+            if not isinstance(expected, str) or not 1 <= len(expected.encode()) <= 500:
+                raise fail("invalid_text", "Use expected text of 1–500 UTF-8 bytes")
+            locator = page.locator("css=" + selector)
+            url = page.url
+            await self.check_visible_text(locator, expected)
+        shot = await self.page_action("screenshot", page, {})
+        kinds = {}
+        for event in window.diagnostics:
+            kind = event["kind"]
+            kinds[kind] = kinds.get(kind, 0) + 1
+        metadata = {
+            "engine": self.engine,
+            "width": shot["width"],
+            "height": shot["height"],
+            "diagnostic_counts": kinds,
+        }
+        if checked:
+            observed = await self.check_visible_text(locator, expected)
+            if url != page.url or url != shot["url"]:
+                raise fail("page_changed", "The browser navigated during the capture")
+            metadata["visible_text_check"] = {
+                "page": request_path(url), "selector": selector,
+                "expected": expected, "observed": observed,
+            }
+        return await self.publish({
+            "owner": args["owner"], "key": args["key"], "summary": args["summary"],
+            "image": shot["image"], "metadata": metadata,
+        })
+
+    @staticmethod
+    async def check_visible_text(locator, expected):
+        if await locator.count() != 1 or not await locator.is_visible():
+            raise fail("target_unavailable", "Choose one visible element for the text check")
+        observed = await locator.inner_text()
+        if observed != expected:
+            raise fail("text_mismatch", "The visible text differs from the expected text")
+        return observed
 
     async def page_action(self, action, page, args):
         match action:
@@ -543,7 +571,7 @@ async def run(args):
                 args.allow_origin,
                 args.idle_seconds,
             )
-            tools = TOOLS | {"share": SHARE} if args.evidence else TOOLS
+            tools = TOOLS | {"share": SHARE, "share_checked": SHARE_CHECKED} if args.evidence else TOOLS
             service = ToolService(tools, worker.invoke)
             await serve(
                 args.socket,

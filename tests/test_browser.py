@@ -3,11 +3,13 @@ import base64
 import unittest
 from contextlib import suppress
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import monotonic
 
 from playwright.async_api import async_playwright
 
 from glassmoon.browser import Browser
+from glassmoon.evidence import Evidence
 from glassmoon.ipc import RequestError
 from glassmoon.openai_service import openai_tool_output
 
@@ -46,8 +48,41 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                         await self.exercise_browser(Browser(engine, backend))
                         await self.exercise_allowed_origins(engine, backend)
                         await self.exercise_expiring_windows(engine, backend)
+                        await self.exercise_checked_evidence(engine, backend)
                     finally:
                         await backend.close()
+
+    async def exercise_checked_evidence(self, engine, backend):
+        with TemporaryDirectory() as directory:
+            evidence = Evidence(Path(directory, "evidence.sqlite"))
+
+            async def publish(payload):
+                return await evidence.invoke("publish", payload)
+
+            worker = Browser(engine, backend, publish=publish)
+            opened = await worker.invoke("open", {})
+            handle = {"window": opened["window"]}
+            await worker.invoke("evaluate", handle | {
+                "script": "html => { document.open(); document.write(html); document.close(); }",
+                "argument": PAGE,
+            })
+            args = handle | {"owner": "tide", "summary": "Checked fixture status", "selector": "#status"}
+            for key, text in (("before", "First save"), ("after", "Second save")):
+                await worker.invoke("actions", handle | {"steps": [
+                    {"action": "element", "operation": "fill", "by": "label", "name": "Fixture note", "text": text},
+                    {"action": "element", "operation": "click", "by": "role", "role": "button", "name": "Save"},
+                ]})
+                record = await worker.invoke("share_checked", args | {"key": key, "expected": text})
+                self.assertEqual(record["metadata"]["visible_text_check"]["observed"], text)
+            with self.assertRaises(RequestError) as error:
+                await worker.invoke("share_checked", args | {"key": "failed", "expected": "First save"})
+            self.assertEqual(error.exception.code, "text_mismatch")
+            await worker.invoke("close", handle)
+            historical = await evidence.invoke("image", {"owner": "tide", "key": "before"})
+            self.assertEqual(historical["metadata"]["visible_text_check"]["observed"], "First save")
+            self.assertNotEqual(historical["image_sha256"], record["image_sha256"])
+            listing = await evidence.invoke("list", {"owner": "tide"})
+            self.assertEqual([row["key"] for row in listing["items"]], ["after", "before"])
 
     async def exercise_expiring_windows(self, engine, backend):
         worker = Browser(engine, backend, max_windows=1, idle_seconds=10)
