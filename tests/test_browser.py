@@ -153,6 +153,11 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((screenshot["width"], screenshot["height"]), (768, 512))
         compact = await worker.invoke("screenshot", b)
         self.assertEqual((compact["width"], compact["height"]), (320, 480))
+        cropped = await worker.invoke("screenshot_region", b | {"x": 25, "y": 25, "width": 170, "height": 130})
+        self.assertEqual([cropped[key] for key in ("x", "y", "width", "height")], [25, 25, 170, 130])
+        with self.assertRaises(RequestError) as invalid_region:
+            await worker.invoke("screenshot_region", b | {"x": 319, "y": 0, "width": 2, "height": 1})
+        self.assertEqual(invalid_region.exception.code, "invalid_region")
         with self.assertRaises(RequestError) as offscreen:
             await worker.invoke("click", b | {"x": 320, "y": 1})
         self.assertEqual(offscreen.exception.code, "invalid_position")

@@ -72,6 +72,10 @@ TOOLS = {
         "See an image of this window's browser viewport. Coordinates are CSS pixels.",
         WINDOW,
     ),
+    "screenshot_region": tool(
+        "Capture a region within the browser viewport. Coordinates and dimensions are CSS pixels.",
+        WINDOW | POSITION | {"width": INTEGER, "height": INTEGER},
+    ),
     "click": tool("Click at viewport coordinates in this window.", WINDOW | POSITION),
     "type_text": tool(
         "Type text into this window's focused control.", WINDOW | {"text": TEXT}
@@ -92,6 +96,7 @@ TOOLS = {
 }
 
 TOOLS["screenshot"]["returns_image"] = True
+TOOLS["screenshot_region"]["returns_image"] = True
 SHARE = tool(
     "Explicitly publish this viewport screenshot and a short reproduction summary. Include no secrets. Returns a share key.",
     WINDOW | {"owner": TEXT, "key": TEXT, "summary": TEXT},
@@ -385,14 +390,26 @@ class Browser:
                         f"Visible selector condition unmet after {timeout} ms",
                     ) from None
                 return {"visible": True}
-            case "screenshot":
+            case "screenshot" | "screenshot_region":
                 viewport = page.viewport_size
+                region = None
+                if action == "screenshot_region":
+                    region = {key: args[key] for key in ("x", "y", "width", "height")}
+                    x, y, width, height = region.values()
+                    if (
+                        any(type(value) is not int for value in region.values())
+                        or x < 0 or y < 0 or width < 1 or height < 1
+                        or x + width > viewport["width"] or y + height > viewport["height"]
+                    ):
+                        raise fail("invalid_region", "Choose a positive region inside the viewport")
+                    viewport = {"width": width, "height": height}
+                offsets = {"x": region["x"], "y": region["y"]} if region else {}
                 for quality in (70, 45, 25, 10):
                     data = await page.screenshot(
-                        type="jpeg", quality=quality, scale="css", animations="disabled"
+                        type="jpeg", quality=quality, scale="css", animations="disabled", clip=region,
                     )
                     if len(data) <= IMAGE_LIMIT:
-                        return image_result(data, **viewport, url=page.url)
+                        return image_result(data, **viewport, **offsets, url=page.url)
                 raise fail(
                     "image_too_large", "Viewport screenshot exceeds the IPC budget"
                 )
