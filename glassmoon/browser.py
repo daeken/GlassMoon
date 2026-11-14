@@ -93,7 +93,7 @@ TOOLS = {
     ),
     "actions": tool(
         "Run up to eight ordered steps in one window. Each item has action (click, type_text, press, scroll, element, or wait_for) and its usual arguments. "
-        "For an element step use operation=click or operation=fill plus the element target fields. Stops at the first error and reports how many steps completed.",
+        "For an element step use operation=click or operation=fill plus the element target fields. Stops at the first error and reports completed steps and whether activation was attempted.",
         WINDOW | {"steps": ARRAY | {"items": {"type": "object"}}},
     ),
     "close": tool("Close only the browser window identified by this handle.", WINDOW),
@@ -515,6 +515,7 @@ class Browser:
         ):
             raise fail("invalid_actions", "Supply one to eight supported browser steps")
         completed = 0
+        activation_attempted = False
         try:
             async with asyncio.timeout(24):
                 for step in steps:
@@ -524,6 +525,8 @@ class Browser:
                         if action == "element"
                         else step
                     )
+                    if action in {"click", "press"} or (action == "element" and params["action"] == "click"):
+                        activation_attempted = True
                     await self.page_action(action, page, params)
                     completed += 1
         except (RequestError, ValueError, KeyError, Error, TypeError, TimeoutError) as error:
@@ -536,6 +539,7 @@ class Browser:
                 "completed": completed,
                 "error": "action_failed",
                 "failed_step": completed + 1,
+                "activation_attempted": activation_attempted,
                 "reason": reason,
                 "action": action,
                 "url": page.url,

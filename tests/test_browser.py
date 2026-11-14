@@ -268,6 +268,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             {"action": "wait_for", "selector": "#status", "text": "semantic", "exact": True, "timeout_ms": 100},
         ]})
         self.assertEqual((partial["completed"], partial["failed_step"], partial["reason"]), (1, 2, "browser_timeout"))
+        self.assertTrue(partial["activation_attempted"])
         await worker.invoke(
             "evaluate", a | {"script": "() => document.body.insertAdjacentHTML('beforeend', '<button>Save</button>')"}
         )
