@@ -14,7 +14,9 @@ from .models import result_text
 
 def terminal_text(value):
     return "".join(
-        char if char in "\n\t" or not unicodedata.category(char).startswith("C") else "�"
+        char
+        if char in "\n\t" or not unicodedata.category(char).startswith("C")
+        else "�"
         for char in str(value)
     ).expandtabs(4)
 
@@ -33,6 +35,7 @@ class Terminal:
         self.sending = set()
         self.partial = {}
         self.loaded = set()
+        self.history_loading = {}
         self.command_history = []
         self.history_index = 0
         self.dirty = True
@@ -46,7 +49,8 @@ class Terminal:
             self.log("status", "No registered services.")
             return
         for generation, service in sorted(
-            self.services.items(), key=lambda entry: (entry[1]["name"], entry[0]),
+            self.services.items(),
+            key=lambda entry: (entry[1]["name"], entry[0]),
         ):
             self.log(
                 "status",
@@ -78,13 +82,19 @@ class Terminal:
             else:
                 current = (await wire.request("list", "list"))["result"]["services"]
                 generation = next(
-                    (item["generation"] for item in current if item["name"] == target and item["state"] == "active"),
+                    (
+                        item["generation"]
+                        for item in current
+                        if item["name"] == target and item["state"] == "active"
+                    ),
                     None,
                 )
                 if generation is None:
                     self.log("status", f"No active service named {target}")
                     return
-            result = (await wire.request("describe", "describe", generation=generation))["result"]
+            result = (
+                await wire.request("describe", "describe", generation=generation)
+            )["result"]
         self.log("status", json.dumps(result, indent=2, ensure_ascii=False))
 
     async def list_services(self):
@@ -94,8 +104,10 @@ class Terminal:
         self.display_services()
 
     async def query(self, window):
-        if window not in self.loaded:
-            # Keep messages typed while history is loading at the end of the buffer.
+        lock = self.history_loading.setdefault(window, asyncio.Lock())
+        async with lock:
+            if window in self.loaded:
+                return
             history = await call(self.socket, f"agent.{window}", "history", {})
             prior = deque(maxlen=500)
             for item in history["messages"]:
@@ -106,16 +118,35 @@ class Terminal:
             self.loaded.add(window)
             self.dirty = True
 
+    async def list_models(self):
+        result = await call(self.socket, "models", "models", {})
+        if not result["models"]:
+            self.log("status", "No models are registered.")
+        for model in result["models"]:
+            inputs = ", ".join(model["input_modalities"])
+            outputs = ", ".join(model["output_modalities"])
+            self.log(
+                "status",
+                f"{model['provider']}/{model['id']}  {inputs} → {outputs}  "
+                f"{model['context_tokens']:,} tokens",
+            )
+        for provider in result["unavailable"]:
+            self.log("status", f"{provider} catalog unavailable")
+
     async def chat(self, window, text):
         async def chunk(value):
             if value["type"] == "text":
-                self.partial[window] = self.partial.get(window, "") + terminal_text(value["text"])
+                self.partial[window] = self.partial.get(window, "") + terminal_text(
+                    value["text"]
+                )
                 self.dirty = True
 
         try:
             await self.query(window)
             self.log(window, f"<you> {text}")
-            result = await call(self.socket, f"agent.{window}", "chat", {"text": text}, on_chunk=chunk)
+            result = await call(
+                self.socket, f"agent.{window}", "chat", {"text": text}, on_chunk=chunk
+            )
             self.log(window, f"<{window}> {result_text(result['message']['content'])}")
         finally:
             self.partial.pop(window, None)
@@ -126,7 +157,13 @@ class Terminal:
         async def run():
             try:
                 await operation()
-            except (EOFError, OSError, ProtocolError, RequestError, ValueError) as error:
+            except (
+                EOFError,
+                OSError,
+                ProtocolError,
+                RequestError,
+                ValueError,
+            ) as error:
                 self.log(window, str(error))
 
         task = asyncio.create_task(run())
@@ -153,20 +190,33 @@ class Terminal:
                 case "/quit":
                     return False
                 case "/help":
-                    self.log(self.active, "/query NAME  /services  /describe NAME|ID  /status  /quit")
-                    self.log(self.active, "F2 switches windows. Page Up and Page Down scroll. // sends a slash.")
+                    self.log(
+                        self.active,
+                        "/query NAME  /services  /describe NAME|ID  /models  /status  /quit",
+                    )
+                    self.log(
+                        self.active,
+                        "F2 switches windows. Page Up and Page Down scroll. // sends a slash.",
+                    )
                 case "/status":
                     self.select("status")
                 case "/services":
                     self.select("status")
                     self.start(self.list_services)
+                case "/models":
+                    self.select("status")
+                    self.start(self.list_models)
                 case "/describe" if argument:
                     self.select("status")
                     self.start(lambda: self.inspect(argument))
                 case "/query" if argument:
                     window = argument.removeprefix("agent.")
-                    if window == "status" or not window or not all(
-                        c.isascii() and (c.isalnum() or c in "_-") for c in window
+                    if (
+                        window == "status"
+                        or not window
+                        or not all(
+                            c.isascii() and (c.isalnum() or c in "_-") for c in window
+                        )
                     ):
                         self.log(self.active, "Enter a valid agent name.")
                         return True
@@ -184,7 +234,10 @@ class Terminal:
         else:
             window = self.active
             self.sending.add(window)
-            self.start(lambda: self.chat(window, text[1:] if text.startswith("//") else text), window)
+            self.start(
+                lambda: self.chat(window, text[1:] if text.startswith("//") else text),
+                window,
+            )
         return True
 
     def key(self, key):
@@ -211,17 +264,25 @@ class Terminal:
                 self.cursor = len(self.input)
             case curses.KEY_BACKSPACE | "\x7f" | "\b":
                 if self.cursor:
-                    self.input = self.input[:self.cursor - 1] + self.input[self.cursor:]
+                    self.input = (
+                        self.input[: self.cursor - 1] + self.input[self.cursor :]
+                    )
                     self.cursor -= 1
             case curses.KEY_DC:
-                self.input = self.input[:self.cursor] + self.input[self.cursor + 1:]
+                self.input = self.input[: self.cursor] + self.input[self.cursor + 1 :]
             case curses.KEY_UP | curses.KEY_DOWN:
                 offset = -1 if key == curses.KEY_UP else 1
-                self.history_index = min(len(self.command_history), max(0, self.history_index + offset))
-                self.input = self.command_history[self.history_index] if self.history_index < len(self.command_history) else ""
+                self.history_index = min(
+                    len(self.command_history), max(0, self.history_index + offset)
+                )
+                self.input = (
+                    self.command_history[self.history_index]
+                    if self.history_index < len(self.command_history)
+                    else ""
+                )
                 self.cursor = len(self.input)
             case str() if key.isprintable():
-                self.input = self.input[:self.cursor] + key + self.input[self.cursor:]
+                self.input = self.input[: self.cursor] + key + self.input[self.cursor :]
                 self.cursor += len(key)
         return True
 
@@ -237,18 +298,25 @@ class Terminal:
         if height < 4 or width < 12:
             self.put(0, "Resize terminal")
             self.screen.refresh()
+            self.dirty = False
             return
-        self.put(0, f" GlassMoon  |  {'status' if self.active == 'status' else '@' + self.active}", curses.A_REVERSE)
+        self.put(
+            0,
+            f" GlassMoon  |  {'status' if self.active == 'status' else '@' + self.active}",
+            curses.A_REVERSE,
+        )
         lines = []
         entries = list(self.windows[self.active])
         if self.active in self.partial:
             entries.append(f"<{self.active}> {self.partial[self.active]}")
         for entry in entries:
             for line in entry.split("\n"):
-                lines.extend(textwrap.wrap(line, width - 1, replace_whitespace=False) or [""])
+                lines.extend(
+                    textwrap.wrap(line, width - 1, replace_whitespace=False) or [""]
+                )
         self.scroll = min(self.scroll, max(0, len(lines) - height + 3))
         end = len(lines) - self.scroll
-        for row, line in enumerate(lines[max(0, end - height + 3):end], start=1):
+        for row, line in enumerate(lines[max(0, end - height + 3) : end], start=1):
             self.put(row, line)
         tabs = " ".join(
             f"[{name}]" if name == self.active else name for name in self.windows
@@ -256,7 +324,7 @@ class Terminal:
         self.put(height - 2, f" {tabs}  |  /help", curses.A_REVERSE)
         available = width - 4
         offset = max(0, self.cursor - available)
-        shown = self.input[offset:offset + available]
+        shown = self.input[offset : offset + available]
         self.put(height - 1, "> " + shown)
         self.screen.move(height - 1, min(width - 1, 2 + self.cursor - offset))
         self.screen.refresh()
@@ -293,7 +361,9 @@ def main():
     parser.add_argument("--query", help="Open an agent chat on startup")
     args = parser.parse_args()
     try:
-        curses.wrapper(lambda screen: asyncio.run(Terminal(screen, args.socket).run(args.query)))
+        curses.wrapper(
+            lambda screen: asyncio.run(Terminal(screen, args.socket).run(args.query))
+        )
     except KeyboardInterrupt:
         return 130
     return 0

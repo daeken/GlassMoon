@@ -1,0 +1,12 @@
+{
+  "models": [
+    {
+      "id": "gpt-6.1-sol",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "context_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "streaming": true
+    }
+  ]
+}

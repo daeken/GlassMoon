@@ -38,7 +38,9 @@ class Profile:
     @contextmanager
     def locked(self):
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with os.fdopen(os.open(f"{self.path}.lock", os.O_CREAT | os.O_RDWR, 0o600), "r+") as lock:
+        with os.fdopen(
+            os.open(f"{self.path}.lock", os.O_CREAT | os.O_RDWR, 0o600), "r+"
+        ) as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             yield
 
@@ -80,13 +82,19 @@ class Profile:
 
 def token_request(**parameters):
     try:
-        response = httpx.post(TOKEN_URL, data={"resource": RESOURCE, **parameters}, timeout=15)
+        response = httpx.post(
+            TOKEN_URL, data={"resource": RESOURCE, **parameters}, timeout=15
+        )
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as error:
         if error.response.status_code in (400, 401, 403):
-            raise AuthError("ChatGPT authorization expired or was rejected. Run login again.") from None
-        raise AuthError(f"OpenAI token endpoint returned HTTP {error.response.status_code}") from None
+            raise AuthError(
+                "ChatGPT authorization expired or was rejected. Run login again."
+            ) from None
+        raise AuthError(
+            f"OpenAI token endpoint returned HTTP {error.response.status_code}"
+        ) from None
     except (httpx.RequestError, ValueError):
         raise AuthError("Could not read the OpenAI token response") from None
 
@@ -95,8 +103,10 @@ def update_tokens(profile, tokens):
     scopes = tokens.get("scope", profile.get("scope", ""))
     if PLAN_SCOPE not in scopes.split():
         raise AuthError("ChatGPT plan usage permission was not granted")
-    if not tokens.get("access_token") or not tokens.get("expires_in") or not (
-        tokens.get("refresh_token") or profile.get("refresh_token")
+    if (
+        not tokens.get("access_token")
+        or not tokens.get("expires_in")
+        or not (tokens.get("refresh_token") or profile.get("refresh_token"))
     ):
         raise AuthError("OpenAI returned an incomplete token set")
     return profile | {
@@ -109,7 +119,9 @@ def update_tokens(profile, tokens):
 
 def browser_authorization(host, client, verifier, nonce):
     state = secrets.token_urlsafe(32)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=")
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=")
     answer = {}
 
     class CallbackHandler(BaseHTTPRequestHandler):
@@ -129,7 +141,9 @@ def browser_authorization(host, client, verifier, nonce):
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(b"Return to the GlassMoon terminal for the sign-in result.")
+            self.wfile.write(
+                b"Return to the GlassMoon terminal for the sign-in result."
+            )
 
     # Threads prevent a browser's speculative connection from blocking the callback.
     with ThreadingHTTPServer(("127.0.0.1", 0), CallbackHandler) as server:
@@ -137,9 +151,14 @@ def browser_authorization(host, client, verifier, nonce):
         redirect = f"http://127.0.0.1:{server.server_port}{CALLBACK}"
         params = {
             "client_id": client or "dynamic_agent_client",
-            "ext_agent_host_id": host, "response_type": "code",
-            "redirect_uri": redirect, "scope": SCOPES, "resource": RESOURCE,
-            "state": state, "nonce": nonce, "code_challenge_method": "S256",
+            "ext_agent_host_id": host,
+            "response_type": "code",
+            "redirect_uri": redirect,
+            "scope": SCOPES,
+            "resource": RESOURCE,
+            "state": state,
+            "nonce": nonce,
+            "code_challenge_method": "S256",
             "code_challenge": challenge.decode(),
         }
         if not client:
@@ -154,7 +173,11 @@ def browser_authorization(host, client, verifier, nonce):
     if answer.get("error") or not answer.get("code"):
         raise AuthError("ChatGPT sign-in was declined or did not complete")
     issued_client = answer.get("client_id", client)
-    if not issued_client or issued_client == "dynamic_agent_client" or (client and client != issued_client):
+    if (
+        not issued_client
+        or issued_client == "dynamic_agent_client"
+        or (client and client != issued_client)
+    ):
         raise AuthError("OpenAI returned an unexpected OAuth client")
     return issued_client, redirect, answer["code"]
 
@@ -164,7 +187,12 @@ def validate_identity(token, client, nonce):
         keys = jwt.PyJWKClient(f"{ISSUER}/.well-known/jwks.json", timeout=15)
         key = keys.get_signing_key_from_jwt(token)
         identity = jwt.decode(
-            token, key, algorithms=["RS256"], audience=client, issuer=ISSUER, leeway=5,
+            token,
+            key,
+            algorithms=["RS256"],
+            audience=client,
+            issuer=ISSUER,
+            leeway=5,
             options={"require": ["sub", "exp", "iat", "nonce"]},
         )
     except jwt.PyJWTError:
@@ -181,22 +209,36 @@ def login(profile):
             previous["host"] = f"urn:uuid:{uuid.uuid4()}"
             profile.write(previous)
     verifier, nonce = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
-    client, redirect, code = browser_authorization(previous["host"], previous.get("client_id"), verifier, nonce)
+    client, redirect, code = browser_authorization(
+        previous["host"], previous.get("client_id"), verifier, nonce
+    )
     tokens = token_request(
-        grant_type="authorization_code", client_id=client, code=code,
-        code_verifier=verifier, redirect_uri=redirect,
+        grant_type="authorization_code",
+        client_id=client,
+        code=code,
+        code_verifier=verifier,
+        redirect_uri=redirect,
     )
     if not tokens.get("id_token"):
         raise AuthError("OpenAI returned no identity token")
     identity = validate_identity(tokens["id_token"], client, nonce)
     if previous.get("subject", identity["sub"]) != identity["sub"]:
-        raise AuthError("Sign-in returned a different account. Use a separate --profile.")
+        raise AuthError(
+            "Sign-in returned a different account. Use a separate --profile."
+        )
     with profile.locked():
         current = profile.read()
         if current.get("client_id") not in (None, client):
             raise AuthError("The saved account changed during sign-in")
-        profile.write(update_tokens({
-            "host": previous["host"], "client_id": client, "subject": identity["sub"],
-            "email": identity.get("email"),
-        }, tokens))
+        profile.write(
+            update_tokens(
+                {
+                    "host": previous["host"],
+                    "client_id": client,
+                    "subject": identity["sub"],
+                    "email": identity.get("email"),
+                },
+                tokens,
+            )
+        )
     print(f"ChatGPT plan connected for {identity.get('email') or 'your account'}.")

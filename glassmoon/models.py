@@ -31,7 +31,13 @@ CAPABILITY = {
         "max_output_tokens": {"type": "integer", "minimum": 1},
         "streaming": BOOLEAN,
     },
-    "required": ["id", "input_modalities", "output_modalities", "context_tokens", "streaming"],
+    "required": [
+        "id",
+        "input_modalities",
+        "output_modalities",
+        "context_tokens",
+        "streaming",
+    ],
 }
 GENERATE = method(
     "Generate a reply from a transcript",
@@ -39,15 +45,24 @@ GENERATE = method(
     {"output_modalities": ARRAY},
 )
 CATALOG = method(
-    "List model capabilities", result={"type": "object", "properties": {
-        "models": {"type": "array", "items": CAPABILITY},
-    }},
+    "List model capabilities",
+    result={
+        "type": "object",
+        "properties": {
+            "models": {"type": "array", "items": CAPABILITY},
+        },
+    },
 )
 
 
 def modalities(values):
-    if not isinstance(values, list) or not values or any(
-        not isinstance(value, str) or not value or len(value) > 40 for value in values
+    if (
+        not isinstance(values, list)
+        or not values
+        or any(
+            not isinstance(value, str) or not value or len(value) > 40
+            for value in values
+        )
     ):
         raise fail("invalid_modalities", "Supply a nonempty array of modality names")
     return set(values)
@@ -59,9 +74,9 @@ def capabilities(model):
     modalities(model["input_modalities"])
     modalities(model["output_modalities"])
     for key in ("context_tokens", "max_output_tokens"):
-        if key == "context_tokens" or key in model:
-            if type(model.get(key)) is not int or model[key] < 1:
-                raise fail("invalid_model", f"{key} must be a positive integer")
+        required = key == "context_tokens" or key in model
+        if required and (type(model.get(key)) is not int or model[key] < 1):
+            raise fail("invalid_model", f"{key} must be a positive integer")
     if type(model.get("streaming")) is not bool:
         raise fail("invalid_model", "streaming must be a boolean")
     return model
@@ -73,7 +88,11 @@ def parts(content):
     if not isinstance(content, list) or not content:
         raise fail("invalid_message", "Content needs text or an array of content parts")
     for part in content:
-        if not isinstance(part, dict) or not isinstance(part.get("type"), str) or not part["type"]:
+        if (
+            not isinstance(part, dict)
+            or not isinstance(part.get("type"), str)
+            or not part["type"]
+        ):
             raise fail("invalid_message", "Content parts require a modality type")
         if part["type"] == "text" and not isinstance(part.get("text"), str):
             raise fail("invalid_message", "Text parts require a text string")
@@ -92,11 +111,22 @@ def input_modalities(messages):
 
 
 def result_text(content):
-    return "".join(part["text"] for part in parts(content) if part["type"] == "text")
+    return "".join(
+        part["text"] if part["type"] == "text" else f"[{part['type']}]"
+        for part in parts(content)
+    )
+
+
+def encoded_size(value):
+    return len(
+        json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode()
+    )
 
 
 def within_reply_limit(value):
-    if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) > 60 * 1024:
+    if encoded_size(value) > 60 * 1024:
         raise fail("reply_too_large", "Reply exceeds the GlassMoon frame limit")
     return value
 
@@ -126,7 +156,10 @@ class Transcripts:
     def create(self, model=None, identifier=None):
         identifier = identifier or uuid.uuid4().hex
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO conversations (id, model) VALUES (?, ?)", (identifier, model))
+            self.db.execute(
+                "INSERT OR IGNORE INTO conversations (id, model) VALUES (?, ?)",
+                (identifier, model),
+            )
         return identifier
 
     def read(self, identifier):
@@ -139,7 +172,11 @@ class Transcripts:
         if not rows:
             raise fail("unknown_conversation", "Conversation does not exist")
         model, revision, _ = rows[0]
-        return model, revision, [json.loads(row[2]) for row in rows if row[2] is not None]
+        return (
+            model,
+            revision,
+            [json.loads(row[2]) for row in rows if row[2] is not None],
+        )
 
     def history(self, identifier, before=None):
         model, revision, messages = self.read(identifier)
@@ -147,13 +184,18 @@ class Transcripts:
         page = []
         size = 0
         for item in reversed(messages[:end]):
-            encoded = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode()) + 1
-            if page and size + encoded > 50 * 1024:
+            encoded = encoded_size(item) + 1
+            if page and size + encoded > 60 * 1024:
                 break
             page.append(item)
             size += encoded
-        return {"conversation": identifier, "model": model, "revision": revision,
-                "messages": page[::-1], "before": end - len(page) or None}
+        return {
+            "conversation": identifier,
+            "model": model,
+            "revision": revision,
+            "messages": page[::-1],
+            "before": end - len(page) or None,
+        }
 
     def append(self, identifier, revision, *messages):
         with self.db:
@@ -161,11 +203,18 @@ class Transcripts:
                 "UPDATE conversations SET revision = revision + ? WHERE id = ? AND revision = ?",
                 (len(messages), identifier, revision),
             ).rowcount:
-                raise fail("conversation_changed", "The conversation changed during this request")
+                raise fail(
+                    "conversation_changed",
+                    "The conversation changed during this request",
+                )
             self.db.executemany(
                 "INSERT INTO messages VALUES (?, ?, ?)",
                 [
-                    (identifier, index, json.dumps(item, ensure_ascii=False, allow_nan=False))
+                    (
+                        identifier,
+                        index,
+                        json.dumps(item, ensure_ascii=False, allow_nan=False),
+                    )
                     for index, item in enumerate(messages, revision)
                 ],
             )

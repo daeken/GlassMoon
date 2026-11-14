@@ -2,11 +2,11 @@
 
 import asyncio
 import os
+import sys
+import unittest
 from contextlib import AsyncExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import sys
-import unittest
 
 from glassmoon.echo import METHODS
 from glassmoon.ipc import connect

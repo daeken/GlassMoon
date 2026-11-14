@@ -5,7 +5,7 @@ import asyncio
 import json
 import sys
 
-from .ipc import ProtocolError, RequestError, connect
+from .ipc import ProtocolError, RequestError, call, connect
 
 
 def print_json(value):
@@ -13,6 +13,16 @@ def print_json(value):
 
 
 async def run(args):
+    if args.command == "call" and args.stream:
+        async def chunk(data):
+            print_json({"type": "chunk", "data": data})
+
+        result = await call(
+            args.socket, args.service, args.method, args.params,
+            version=args.interface_version, on_chunk=chunk,
+        )
+        print_json({"type": "response", "result": result})
+        return
     async with connect(args.socket) as wire:
         match args.command:
             case "call":
@@ -51,6 +61,7 @@ def main():
     call.add_argument("method")
     call.add_argument("params", nargs="?", type=json.loads, default={})
     call.add_argument("--interface-version", type=int, default=1)
+    call.add_argument("--stream", action="store_true", help="Print chunks as they arrive")
     try:
         asyncio.run(run(parser.parse_args()))
         return 0
