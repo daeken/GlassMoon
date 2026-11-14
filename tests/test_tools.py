@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import AsyncExitStack
@@ -40,7 +41,7 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             workspace = Workspace(directory, read_only=True)
             self.assertEqual(
                 [item["name"] for item in workspace.definitions],
-                ["list_files", "read_file", "find_in_file"],
+                ["list_files", "read_file", "find_in_file", "workspace_diff"],
             )
             self.assertNotIn("error", await workspace.execute(tool("list_files", path=".")))
             read = await workspace.execute(tool("read_file", path=file.name))
@@ -69,6 +70,48 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             file.write_text("needle\n")
             stale = await workspace.execute(tool("find_in_file", **args))
             self.assertEqual(stale["error"], "revision_changed")
+
+    async def test_workspace_diff_reads_selected_snapshot_without_touching_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.DEVNULL)
+
+            git("init")
+            workspace_path = root / "review"
+            workspace_path.mkdir()
+            selected = workspace_path / "note.txt"
+            unrelated = workspace_path / "unrelated.txt"
+            selected.write_text("initial")
+            unrelated.write_text("unrelated original\n")
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "Initial")
+            selected.write_text("staged edit\n")
+            git("add", "review/note.txt")
+            selected.write_text("working edit\n")
+            unrelated.write_text("unrelated edit\n")
+            index = (root / ".git" / "index").read_bytes()
+            workspace = Workspace(workspace_path, read_only=True)
+            args = {"path": "note.txt", "baseline": "HEAD"}
+            summary = await workspace.execute(tool("workspace_diff", **args))
+            self.assertEqual(summary["change"], "modified")
+            self.assertEqual(summary["baseline"], git("rev-parse", "HEAD").decode().strip())
+            self.assertIn("-initial\n\\ No newline", summary["patch"])
+            self.assertIn("+working edit", summary["patch"])
+            self.assertNotIn("unrelated", summary["patch"])
+            self.assertNotIn("staged edit", summary["patch"])
+            revision = (await workspace.execute(tool("read_file", path=selected.name)))["revision"]
+            self.assertEqual(summary["revision"], revision)
+            selected.write_text("long edit " * 1000)
+            truncated = await workspace.execute(tool("workspace_diff", **(args | {"baseline": summary["baseline"]})))
+            self.assertTrue(truncated["truncated"])
+            self.assertNotEqual(truncated["revision"], revision)
+            selected.unlink()
+            removed = await workspace.execute(tool("workspace_diff", **args))
+            self.assertEqual((removed["change"], removed["revision"]), ("deleted", None))
+            self.assertEqual((root / ".git" / "index").read_bytes(), index)
+            self.assertEqual(unrelated.read_text(), "unrelated edit\n")
 
     async def test_workspace_batch_edit_rolls_back_failed_match(self):
         with tempfile.TemporaryDirectory() as directory:

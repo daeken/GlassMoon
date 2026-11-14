@@ -94,6 +94,8 @@ Raw Python runs as your local user in a fresh process with the workspace as its 
 
 Use `find_in_file` for literal, case-sensitive matches with line and character column numbers. Pass the returned `next` and `revision` to continue a search against the same file revision.
 
+Use `workspace_diff` to review one UTF-8 file of up to 128 KiB against `HEAD` or an explicit full Git commit ID. The reply includes the resolved baseline, the current file's SHA-256 revision, and a bounded unified diff with a `truncated` indicator. It compares the file on disk against the commit and leaves the index untouched.
+
 Add `--workspace-read-only` for a reviewer that needs directory listings, file contents, and search. This flag controls the built-in workspace tools. The agent's separately configured tool services retain their own capabilities.
 
 Use `edit_file_batch` for up to eight exact replacements within one file revision. The edits run in order, and the file is written only after all replacements match.

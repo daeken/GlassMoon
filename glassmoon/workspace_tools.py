@@ -1,13 +1,17 @@
 """Tools a GlassMoon agent can use in an operator-selected workspace."""
 
 import asyncio
+import difflib
 import fcntl
 import hashlib
 import heapq
+import io
 import json
 import os
+import re
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -19,6 +23,9 @@ from .service import fail, method
 FILE_LIMIT = 2 * 1024 * 1024
 OUTPUT_LIMIT = 4000
 EVAL_TIMEOUT = 15
+DIFF_FILE_LIMIT = 128 * 1024
+DIFF_OUTPUT_LIMIT = 4500
+READ_TOOLS = ("list_files", "read_file", "find_in_file", "workspace_diff")
 
 TOOLS = {
     "list_files": method(
@@ -39,6 +46,11 @@ TOOLS = {
             "after_line": INTEGER | {"description": "Use 0 for a new search."},
             "revision": TEXT | {"description": "Use an empty string for a new search."},
         },
+    ),
+    "workspace_diff": method(
+        "Compare one UTF-8 workspace file against HEAD or a full local Git commit ID. "
+        "Returns a bounded unified diff, the resolved baseline commit, and the SHA-256 of the file read.",
+        {"path": TEXT, "baseline": TEXT},
     ),
     "write_file": method(
         "Create a UTF-8 file or replace it at the revision returned by read_file. "
@@ -97,7 +109,7 @@ class Workspace:
             raise ValueError("Raw Python requires a writable workspace")
         self.socket = socket
         self.names = (
-            ["list_files", "read_file", "find_in_file"] if read_only
+            list(READ_TOOLS) if read_only
             else [name for name in TOOLS if name != "python_eval" or python]
         )
         self.definitions = [
@@ -109,7 +121,7 @@ class Workspace:
             for name in self.names
         ]
 
-    def path(self, path, *, allow_root=False):
+    def path(self, path, *, allow_root=False, allow_missing_parent=False):
         if not isinstance(path, str) or not path:
             raise fail("invalid_path", "Supply a workspace-relative file path")
         relative = Path(path)
@@ -125,7 +137,7 @@ class Workspace:
             raise fail(
                 "invalid_path", "Choose a file inside the workspace without symlinks"
             )
-        if not resolved.parent.is_dir():
+        if not allow_missing_parent and not resolved.parent.is_dir():
             raise fail("missing_directory", "The parent directory does not exist")
         return resolved
 
@@ -162,14 +174,14 @@ class Workspace:
             os.close(fd)
         return {"entries": page, "next": page[-1]["name"] if len(names) > len(page) else None}
 
-    def read(self, path):
+    def read(self, path, limit=FILE_LIMIT):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as file:
             mode = os.fstat(file.fileno()).st_mode
             if not stat.S_ISREG(mode):
                 raise fail("invalid_file", "Choose a regular UTF-8 file")
-            data = file.read(FILE_LIMIT + 1)
-        if len(data) > FILE_LIMIT:
+            data = file.read(limit + 1)
+        if len(data) > limit:
             raise fail("file_too_large", "File exceeds the workspace tool size limit")
         return (
             data.decode("utf-8"),
@@ -199,6 +211,65 @@ class Workspace:
             excerpt = ("…" if start else "") + line[start:end] + ("…" if end < len(line) else "")
             matches.append({"line": number, "column": position + 1, "excerpt": excerpt})
         return {"matches": matches, "revision": current_revision, "next": None}
+
+    def git(self, *arguments):
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        environment.update(GIT_ALLOW_PROTOCOL="", GIT_NO_LAZY_FETCH="1", GIT_OPTIONAL_LOCKS="0")
+        try:
+            return subprocess.run(
+                ["git", "--no-replace-objects", "--literal-pathspecs", *arguments], cwd=self.root,
+                env=environment, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, timeout=3, check=True,
+            ).stdout
+        except (subprocess.SubprocessError, OSError):
+            raise fail("git_unavailable", "Could not read this local Git baseline") from None
+
+    def workspace_diff(self, path, baseline):
+        if baseline != "HEAD" and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", baseline) is None:
+            raise fail("invalid_baseline", "Supply HEAD or a full local commit ID")
+        commit = self.git("rev-parse", "--verify", f"{baseline}^{{commit}}").decode().strip()
+        relative = path.relative_to(self.root).as_posix()
+        entry = self.git("ls-tree", "-z", commit, "--", relative)
+        original = ""
+        if entry:
+            identity = entry.partition(b"\t")[0].split()
+            if len(identity) != 3 or identity[0] not in (b"100644", b"100755"):
+                raise fail("invalid_file", "Choose a regular UTF-8 file in the Git baseline")
+            blob = identity[2].decode()
+            if int(self.git("cat-file", "-s", blob)) > DIFF_FILE_LIMIT:
+                raise fail("file_too_large", "The Git baseline file exceeds the diff size limit")
+            original = self.git("cat-file", "blob", blob).decode("utf-8")
+        try:
+            current, revision, _ = self.read(path, DIFF_FILE_LIMIT)
+        except FileNotFoundError:
+            if not entry:
+                raise
+            current, revision = "", None
+        patch = bytearray()
+        truncated = False
+        for line in difflib.unified_diff(
+            list(io.StringIO(original)), list(io.StringIO(current)),
+            f"a/{relative}" if entry else "/dev/null",
+            f"b/{relative}" if revision is not None else "/dev/null",
+        ):
+            data = line.encode()
+            if not line.endswith("\n"):
+                data += b"\n\\ No newline at end of file\n"
+            remaining = DIFF_OUTPUT_LIMIT - len(patch)
+            patch.extend(data[:remaining])
+            if len(data) > remaining:
+                truncated = True
+                break
+        if not entry:
+            change = "added"
+        elif revision is None:
+            change = "deleted"
+        else:
+            change = "modified" if original != current else "unchanged"
+        return {
+            "baseline": commit, "revision": revision, "change": change,
+            "patch": patch.decode(errors="ignore"), "truncated": truncated,
+        }
 
     def update(self, name, params, path):
         revision = params["revision"]
@@ -351,6 +422,9 @@ class Workspace:
             if name == "list_files":
                 directory = self.path(params["path"], allow_root=True)
                 return self.list_files(directory, params.get("after", ""))
+            if name == "workspace_diff":
+                path = self.path(params["path"], allow_missing_parent=True)
+                return await asyncio.to_thread(self.workspace_diff, path, params["baseline"])
             path = self.path(params["path"])
             if name == "find_in_file":
                 return self.find_in_file(path, params["query"], params.get("after_line", 0), params.get("revision"))
