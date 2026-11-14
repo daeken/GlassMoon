@@ -57,6 +57,9 @@ pub enum Command {
         generation: u64,
         expected_active: Option<u64>,
     },
+    Discard {
+        generation: u64,
+    },
     Call {
         service: String,
         generation: Option<u64>,

@@ -279,6 +279,31 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(str(latest), arguments[1])
             self.assertIn("Inspect the promoted worker", arguments[1])
 
+    async def test_discard_retires_only_a_staged_worker(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(10):
+            socket = await self.start_broker(stack, 5000)
+            active, previous = await self.register_old(stack, socket)
+            staged = await stack.enter_async_context(connect(socket))
+            registration = await staged.request(
+                "register", "candidate", name="echo", interface_version=1, methods=METHODS,
+            )
+            candidate = registration["result"]["generation"]
+            client = await stack.enter_async_context(connect(socket))
+            with self.assertRaises(RequestError) as rejected:
+                await client.request("discard", "active", generation=previous)
+            self.assertEqual(rejected.exception.code, "not_staged")
+            call_task = asyncio.create_task(call(socket, "echo", "echo", {"value": "check"}, generation=candidate))
+            invoke = await staged.receive()
+            self.assertEqual(invoke["method"], "echo")
+            discarded = await client.request("discard", "discard", generation=candidate)
+            self.assertEqual(discarded["result"], {"discarded": candidate})
+            with self.assertRaises(RequestError) as interrupted:
+                await call_task
+            self.assertEqual(interrupted.exception.code, "generation_discarded")
+            self.assertEqual(await staged.receive(), {"type": "retire", "reason": "discarded"})
+            await self.call(client, "still-active", "current")
+            self.assertEqual((await active.receive())["params"], {"value": "current"})
+
     async def test_pre_promotion_probe_targets_only_staged_generation(self):
         async with AsyncExitStack() as stack, asyncio.timeout(10):
             socket = await self.start_broker(stack, 5000)

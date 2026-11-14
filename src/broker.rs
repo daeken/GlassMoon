@@ -160,6 +160,25 @@ impl Broker {
                 generation,
                 expected_active,
             } => self.promote(peer, &id, generation, expected_active),
+            Command::Discard { generation } => {
+                match self
+                    .generations
+                    .get(&generation)
+                    .map(|service| service.state)
+                {
+                    Some(State::Staged) => {
+                        self.ok(peer, &id, json!({ "discarded": generation }));
+                        self.retire(generation, "discarded");
+                    }
+                    Some(_) => self.error(
+                        peer,
+                        &id,
+                        "not_staged",
+                        "Only staged generations can be discarded",
+                    ),
+                    None => self.error(peer, &id, "unknown_generation", "Generation is absent"),
+                }
+            }
             Command::Call {
                 service,
                 generation,
@@ -485,13 +504,18 @@ impl Broker {
                     .map(|(_, call)| call)
                     .collect();
                 for call in calls {
-                    let error = if reason == "deadline" {
-                        RpcError::new("drain_timeout", "Service drain deadline expired")
-                    } else {
-                        RpcError::new(
+                    let error = match reason {
+                        "deadline" => {
+                            RpcError::new("drain_timeout", "Service drain deadline expired")
+                        }
+                        "discarded" => RpcError::new(
+                            "generation_discarded",
+                            "The staged generation was discarded",
+                        ),
+                        _ => RpcError::new(
                             "service_disconnected",
                             "Service disconnected before replying",
-                        )
+                        ),
                     };
                     self.deliver(call, Outcome::Error { error });
                 }

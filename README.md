@@ -260,6 +260,8 @@ The release command sends the probe to the specified generation and compares the
 Add `--check-only` to run the probe while leaving the candidate staged. The result identifies the checked generation and time, and includes a verified Python entry point digest when the probe reports one. A later release probes the candidate again before activation.
 Pass `--expected-active GENERATION` to require the active route you reviewed, or `0` to require an empty route.
 
+To retire a rejected candidate, run `python -m glassmoon --socket "$GLASSMOON_SOCKET" discard GENERATION`. The broker accepts this command for staged generations.
+
 Shared tool workers expose `health` with `status` and their tool count. Agents report their identity and saved conversation revision. These probes check basic worker readiness. Use a service-specific probe when release depends on a downstream dependency.
 
 Agents, browsers, the mailbox, the evidence service, and MCP bridges also accept `--staged`. Use the same state path for stateful replacements. For an agent, probe its saved revision before activation. For a browser replacement, old windows close when the old worker retires.
@@ -338,6 +340,7 @@ Each message is a UTF-8 JSON object followed by a newline. JSON payloads are lim
 | `watch` | Get the initial snapshot, then receive `type: "event"` messages for registration, promotion, draining, and retirement. |
 | `register` | Send `name`, `interface_version`, and `methods`. Optionally set `kind` to `model_provider`. Each method includes `description`, `params_schema`, and `result_schema`. The broker returns a generation ID tied to this connection. |
 | `activate` | Send `generation` and `expected_active` to switch a staged generation into service from a separate trusted connection. |
+| `discard` | Send `generation` to retire a staged candidate. |
 | `promote` | From the staged worker’s connection, send `expected_active` with the generation to replace, or `null` for an empty route. Promotion succeeds only if the expectation still matches. |
 | `call` | Send `service`, `interface_version`, `method`, and `params`. Set `stream: true` to receive chunks. If the broker advertises `generation_calls`, specify `generation` to call an exact active or staged generation. The broker checks the selected generation’s version and method. Workers validate arguments using the declared schemas as an interface contract. |
 

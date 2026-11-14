@@ -35,6 +35,9 @@ async def run(args):
         return
     async with connect(args.socket) as wire:
         match args.command:
+            case "discard":
+                reply = await wire.request("discard", "cli", generation=args.generation)
+                print_json(reply["result"])
             case "describe":
                 print_json(
                     (await wire.request("describe", "cli", generation=args.generation))[
@@ -56,6 +59,8 @@ def main():
     commands.add_parser("watch", help="Print a snapshot followed by lifecycle events")
     describe = commands.add_parser("describe", help="Show a generation's interface")
     describe.add_argument("generation", type=int)
+    discard = commands.add_parser("discard", help="Retire a staged generation")
+    discard.add_argument("generation", type=int)
     call = commands.add_parser("call", help="Call an active service")
     call.add_argument("service")
     call.add_argument("method")
