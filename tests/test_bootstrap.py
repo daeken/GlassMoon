@@ -50,14 +50,35 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             with patch("glassmoon.tui.call", side_effect=history):
                 await terminal.query("moon")
                 self.assertEqual(terminal.history_before["moon"], 5)
+                pages = [list(terminal.windows["moon"])]
                 await terminal.older_history("moon")
                 self.assertEqual(terminal.history_before["moon"], 1)
+                pages.append(terminal.history_page["moon"])
                 await terminal.older_history("moon")
                 self.assertIsNone(terminal.history_before["moon"])
+                pages.append(terminal.history_page["moon"])
+                await terminal.latest_history("moon")
+            self.assertNotIn("moon", terminal.history_page)
+            self.assertEqual(list(terminal.windows["moon"]), pages[0])
             self.assertEqual(
-                [line[len("<you> ")] for line in terminal.windows["moon"]],
+                [line[len("<you> ")] for page in reversed(pages) for line in page],
                 list("012345678"),
             )
+
+    def test_short_history_pages_keep_every_cursor_position(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            store.create(identifier="moon")
+            messages = [{"role": "user", "content": str(index)} for index in range(827)]
+            store.append("moon", 0, *messages)
+            page = store.history("moon")
+            fetched = page["messages"]
+            while page["before"] is not None:
+                self.assertLessEqual(len(page["messages"]), 200)
+                page = store.history("moon", page["before"])
+                fetched = page["messages"] + fetched
+            self.assertEqual(fetched, messages)
 
     async def test_tool_policy_rolls_back_and_survives_replacement(self):
         with tempfile.TemporaryDirectory() as folder:

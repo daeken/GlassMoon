@@ -41,6 +41,8 @@ class Terminal:
         self.loaded = set()
         self.history_loading = {}
         self.history_before = {}
+        self.latest_before = {}
+        self.history_page = {}
         self.command_history = []
         self.history_index = 0
         self.dirty = True
@@ -130,30 +132,50 @@ class Terminal:
         async with lock:
             if window in self.loaded:
                 return
-            await self.load_history(window, {}, older=False)
+            prior, before = await self.load_history(window, {})
+            self.history_before[window] = before
+            self.latest_before[window] = before
+            history = self.windows[window]
+            existing = list(history)
+            history.clear()
+            history.extend(prior)
+            history.extend(existing)
             self.loaded.add(window)
+            self.dirty = True
 
-    async def load_history(self, window, arguments, *, older):
+    async def load_history(self, window, arguments):
         history = await call(self.socket, f"agent.{window}", "history", arguments)
         prior = []
         for item in history["messages"]:
             label = "you" if item["role"] == "user" else window
             prior.append(terminal_text(f"<{label}> {result_text(item['content'])}"))
-        self.history_before[window] = history["before"]
-        entries = [*prior, *self.windows[window]]
-        self.windows[window] = deque(entries[:500] if older else entries[-500:], maxlen=500)
-        if older and self.active == window:
-            self.scroll_to_top = True
-        self.dirty = True
+        return prior, history["before"]
 
     async def older_history(self, window):
         await self.query(window)
         async with self.history_loading[window]:
             cursor = self.history_before[window]
             if cursor is None:
-                self.log(window, "Reached the start of the saved conversation.")
+                notice = "Reached the start of the saved conversation."
+                if window not in self.history_page:
+                    self.log(window, notice)
                 return
-            await self.load_history(window, {"before": cursor}, older=True)
+            entries, before = await self.load_history(window, {"before": cursor})
+            self.history_page[window] = entries
+            self.history_before[window] = before
+            if self.active == window:
+                self.scroll_to_top = True
+            self.dirty = True
+
+    async def latest_history(self, window):
+        await self.query(window)
+        async with self.history_loading[window]:
+            self.history_before[window] = self.latest_before[window]
+            self.history_page.pop(window, None)
+            if self.active == window:
+                self.scroll = 0
+                self.scroll_to_top = False
+            self.dirty = True
 
     async def list_models(self):
         result = await call(self.socket, "models", "models", {})
@@ -366,7 +388,7 @@ class Terminal:
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
-                    self.log(self.active, "/older loads earlier messages in an agent window")
+                    self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -378,6 +400,9 @@ class Terminal:
                 case "/older" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.older_history(window), window)
+                case "/latest" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.latest_history(window), window)
                 case "/tool" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.change_tool(window, argument), window)
@@ -442,6 +467,9 @@ class Terminal:
             self.log(self.active, "This agent is still replying.")
         else:
             window = self.active
+            self.history_page.pop(window, None)
+            if window in self.latest_before:
+                self.history_before[window] = self.latest_before[window]
             self.sending.add(window)
             self.start(
                 lambda: self.chat(window, text[1:] if text.startswith("//") else text),
@@ -509,14 +537,21 @@ class Terminal:
             self.screen.refresh()
             self.dirty = False
             return
+        browsing = self.active in self.history_page
+        history_label = ""
+        if browsing:
+            history_label = "  |  saved history"
+            if self.history_before[self.active] is None:
+                history_label += "  |  start of conversation"
         self.put(
             0,
-            f" GlassMoon  |  {'status' if self.active == 'status' else '@' + self.active}",
+            f" GlassMoon  |  {'status' if self.active == 'status' else '@' + self.active}"
+            + history_label,
             curses.A_REVERSE,
         )
         lines = []
-        entries = list(self.windows[self.active])
-        if self.active in self.partial:
+        entries = list(self.history_page.get(self.active, self.windows[self.active]))
+        if self.active in self.partial and not browsing:
             entries.append(f"<{self.active}> {self.partial[self.active]}")
         for entry in entries:
             for line in entry.split("\n"):

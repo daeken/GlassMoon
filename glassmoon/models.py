@@ -258,7 +258,7 @@ class Transcripts:
         page = []
         size = 0
         rows = self.db.execute(
-            "SELECT value FROM messages WHERE conversation=? AND position<? ORDER BY position DESC",
+            "SELECT value FROM messages WHERE conversation=? AND position<? ORDER BY position DESC LIMIT 200",
             (identifier, end),
         )
         for (value,) in rows:
