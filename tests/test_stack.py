@@ -13,6 +13,28 @@ from glassmoon.toolbox import call_tool
 
 
 class StackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stack_timeout_names_failed_readiness_probe(self):
+        with TemporaryDirectory(prefix="gm-stack-probe-", dir="/tmp") as root:
+            folder = Path(root)
+            manifest = folder / "stack.toml"
+            content = Path("examples/offline-stack.toml").read_text()
+            manifest.write_text(content.replace('expect = { agent = "moon" }', 'expect = { agent = "other" }'))
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "glassmoon.stack", manifest,
+                "--state", folder / "state", "--timeout", "2",
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                async with asyncio.timeout(10):
+                    _, detail = await process.communicate()
+                self.assertEqual(process.returncode, 1)
+                self.assertIn(b"agent.moon was not ready", detail)
+                self.assertIn(b"info probe returned unexpected data", detail)
+            finally:
+                if process.returncode is None:
+                    process.terminate()
+                    await asyncio.wait_for(process.wait(), 5)
+
     async def test_stack_restarts_broker_and_preserves_agent_state(self):
         with TemporaryDirectory(prefix="gm-stack-recovery-", dir="/tmp") as root:
             process = await asyncio.create_subprocess_exec(

@@ -17,7 +17,6 @@ from .ipc import ProtocolError, RequestError, call, connect
 from .supervisor import stop
 
 CLEAN_ENV = ("PATH", "LANG", "LC_ALL", "TMPDIR")
-CONNECT_ERROR = (EOFError, OSError, ProtocolError, RequestError)
 
 
 def manifest(path):
@@ -146,51 +145,45 @@ class Stack:
         self.socket.unlink()
 
     async def readiness(self, process, service=None, probe=None):
-        async with asyncio.timeout(self.timeout):
-            while process.returncode is None:
-                try:
-                    async with asyncio.timeout(2):
-                        async with connect(self.socket) as wire:
-                            rows = (await wire.request("list", "list"))["result"][
-                                "services"
-                            ]
-                            exact_calls = "generation_calls" in wire.features
-                        if service:
-                            active = next(
-                                (
-                                    row
-                                    for row in rows
-                                    if row["name"] == service
-                                    and row["state"] == "active"
-                                ),
-                                None,
-                            )
-                            if not active:
-                                await asyncio.sleep(0.1)
-                                continue
-                            if probe:
-                                if not exact_calls:
-                                    raise RuntimeError("Readiness probes require a broker with exact-generation calls")
-                                result = await call(
-                                    self.socket,
-                                    service,
-                                    probe["method"],
-                                    probe.get("params", {}),
-                                    version=active["interface_version"],
-                                    generation=active["generation"],
-                                )
-                                if not isinstance(result, dict) or any(
-                                    key not in result or result[key] != value
-                                    for key, value in probe.get("expect", {}).items()
-                                ):
-                                    await asyncio.sleep(0.1)
-                                    continue
-                        return
-                except (*CONNECT_ERROR, TimeoutError):
-                    await asyncio.sleep(0.1)
-            raise RuntimeError(
-                f"{service or 'broker'} exited with status {process.returncode}"
+        deadline = asyncio.get_running_loop().time() + self.timeout
+        reason = "could not connect to the broker"
+        while process.returncode is None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError(f"{service or 'broker'} was not ready within {self.timeout:g}s ({reason})")
+            try:
+                async with asyncio.timeout(min(2, remaining)):
+                    reason = await self.readiness_reason(service, probe)
+            except RequestError as error:
+                reason = f"broker or probe returned {error.code}"
+            except (EOFError, OSError, ProtocolError, TimeoutError) as error:
+                reason = f"broker or probe returned {type(error).__name__}"
+            if reason is None:
+                return
+            await asyncio.sleep(0.1)
+        raise RuntimeError(f"{service or 'broker'} exited with status {process.returncode}")
+
+    async def readiness_reason(self, service, probe):
+        async with connect(self.socket) as wire:
+            rows = (await wire.request("list", "list"))["result"]["services"]
+            exact_calls = "generation_calls" in wire.features
+        if not service:
+            return None
+        active = next((row for row in rows if row["name"] == service and row["state"] == "active"), None)
+        if active is None:
+            return "no active worker was registered"
+        if probe:
+            if not exact_calls:
+                raise RuntimeError("Readiness probes require a broker with exact-generation calls")
+            result = await call(
+                self.socket, service, probe["method"], probe.get("params", {}),
+                version=active["interface_version"], generation=active["generation"],
             )
+            if not isinstance(result, dict) or any(
+                key not in result or result[key] != value for key, value in probe.get("expect", {}).items()
+            ):
+                return f"{probe['method']} probe returned unexpected data"
+        return None
 
     async def run(self, smoke, *, restart_broker=False):
         async with AsyncExitStack() as stack:
