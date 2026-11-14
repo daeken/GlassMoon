@@ -403,6 +403,21 @@ class Terminal:
             return
         self.log("status", f"Saved verified screenshot to {saved}")
 
+    async def show_evidence(self, argument):
+        parts = argument.split()
+        if len(parts) != 2:
+            self.log("status", "Usage /evidence OWNER KEY")
+            return
+        owner, key = parts
+        evidence = await call_tool(self.socket, self.evidence, "read", {"owner": owner, "key": key})
+        self.log("status", f"Evidence {owner}/{key}")
+        self.log("status", evidence["summary"])
+        if evidence["metadata"]:
+            self.log("status", json.dumps(evidence["metadata"], ensure_ascii=False, indent=2))
+        if evidence.get("image_sha256"):
+            self.log("status", f"Screenshot SHA-256 {evidence['image_sha256']}")
+            self.log("status", f"Use /save-image {owner} {key} PATH to save the screenshot.")
+
     async def resolve_task(self, arguments):
         fields = arguments.split(maxsplit=3)
         if len(fields) != 4 or not fields[1].isdecimal():
@@ -511,6 +526,7 @@ class Terminal:
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
                     self.log(self.active, "/save-image OWNER KEY PATH saves a shared screenshot")
+                    self.log(self.active, "/evidence OWNER KEY shows a shared observation")
                     self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
                     self.log(self.active, "/more-tasks pages through your last task list")
@@ -581,6 +597,9 @@ class Terminal:
                 case "/save-image" if argument:
                     self.select("status")
                     self.start(lambda: self.save_evidence(argument))
+                case "/evidence" if argument:
+                    self.select("status")
+                    self.start(lambda: self.show_evidence(argument))
                 case "/children" if argument:
                     self.select("status")
                     self.start(lambda: self.list_tasks(parent=argument))
