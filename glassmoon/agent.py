@@ -255,10 +255,7 @@ class Agent:
                 len(rounds) >= MAX_TOOL_ROUNDS
                 or len(used_ids) + len(announced) > MAX_TOOL_CALLS
             ):
-                raise fail(
-                    "tool_limit",
-                    "The agent reached its workspace tool limit for this turn",
-                )
+                return self.limited_reply(reply, rounds)
             ids = {item["id"] for item in announced}
             if ids & used_ids:
                 raise fail("duplicate_tool_call", "The provider reused a tool call ID")
@@ -317,6 +314,24 @@ class Agent:
                         }
                     )
         raise AssertionError("Tool loop exhausted")
+
+    @staticmethod
+    def limited_reply(reply, rounds):
+        names = ", ".join(
+            f"`{item['name']}`" for exchange in rounds for item in exchange["calls"]
+        )
+        explanation = "The tool limit ended this turn before the model saved a final report."
+        if names:
+            explanation += f" Calls already attempted: {names}. Review their effects before continuing."
+        return {
+            **{
+                key: reply[key]
+                for key in ("provider", "model", "provider_generation")
+                if key in reply
+            },
+            "message": {"role": "assistant", "content": explanation},
+            "outcome": "review",
+        }
 
     async def compact(self, snapshot, force=False):
         revision, through, summary, history = snapshot

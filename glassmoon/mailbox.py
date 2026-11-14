@@ -444,6 +444,8 @@ class MailboxService(ToolService):
                 "receipt_incomplete",
                 "No completed receipt for this attempt. Verify its effects.",
             )
+        if receipt["reply"].get("outcome") == "review":
+            raise fail("receipt_needs_review", "The saved reply asks you to verify task effects")
         result = (
             result_text(receipt["reply"]["message"]["content"]).strip()
             or "Agent returned an empty reply."

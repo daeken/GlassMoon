@@ -209,6 +209,8 @@ A dispatcher claims each task with a renewable lease. After losing a reply, the 
 
 Use `/timeline ID` to see when the mailbox recorded claims, tool events, replies, and review decisions across attempts. The view distinguishes an agent reply from operator verification. Tasks created before recording was enabled have a partial timeline.
 
+If a turn exhausts its tool budget after starting work, the agent saves a partial report in its transcript. The mailbox keeps that task in review so the operator can check the effects before retrying.
+
 ### Probe a candidate before switching traffic
 
 Workers that accept `--staged` register a candidate generation while the current generation keeps serving. Run the release command with the candidate ID printed by the worker.

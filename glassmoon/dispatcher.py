@@ -160,7 +160,7 @@ class Dispatch:
                 result = f"Delivery interrupted ({type(error).__name__}). Verify any effects before retrying."
                 reply = await self.recover_reply(task)
             if reply is not None:
-                status = "done"
+                status = "review" if reply.get("outcome") == "review" else "done"
                 result = (
                     result_text(reply["message"]["content"]).strip()
                     or "Agent returned an empty reply."

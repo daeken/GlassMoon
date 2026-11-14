@@ -225,3 +225,30 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 42,
             )
+
+    async def test_tool_limit_commits_review_receipt_without_running_another_call(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {}, "", store, tool_services=["tools.fixture"])
+            catalog = [{"name": "note", "description": "Save note", "parameters": {"type": "object"}}]
+            model_reply = {
+                "provider": "test", "model": "test",
+                "message": {"role": "assistant", "content": ""},
+                "tool_calls": [{"id": "call", "name": "tools_fixture__note", "arguments": "{}"}],
+            }
+            tool = AsyncMock(return_value={"note": "Saved"})
+            task = {"id": "d" * 32, "attempt": 1, "text": "Run the fixture"}
+            with (
+                patch("glassmoon.agent.MAX_TOOL_ROUNDS", 1),
+                patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(14, catalog))),
+                patch("glassmoon.agent.call", AsyncMock(return_value=model_reply)),
+                patch("glassmoon.agent.call_tool", tool),
+            ):
+                response = await agent.handle("run_task", task, ignore, False)
+                self.assertEqual(response["outcome"], "review")
+                self.assertIn("tools_fixture__note", response["message"]["content"])
+                self.assertEqual(await agent.handle("run_task", task, ignore, False), response)
+                receipt = await agent.handle("task_receipt", {"id": task["id"], "attempt": 1}, ignore, False)
+                self.assertEqual(receipt["reply"]["outcome"], "review")
+            tool.assert_awaited_once()

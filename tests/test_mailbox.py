@@ -241,6 +241,29 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             (task["id"], "done", "Saved once"),
         )
 
+    async def test_saved_partial_reply_keeps_task_in_review(self):
+        task = self.rpc("submit", **TASK)
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+        reply = {"message": {"content": "Tool effects need review"}, "outcome": "review"}
+
+        async def route(method, fields):
+            return self.rpc(method, **fields)
+
+        with (
+            patch.object(dispatcher, "online", AsyncMock(return_value=True)),
+            patch.object(dispatcher, "rpc", side_effect=route),
+            patch("glassmoon.dispatcher.call", AsyncMock(return_value=reply)),
+        ):
+            row = await dispatcher.deliver()
+        self.assertEqual((row["status"], row["result"]), ("review", "Tool effects need review"))
+        worker = MailboxService(self.box, "socket")
+        with (
+            patch("glassmoon.mailbox.call", AsyncMock(return_value={"status": "done", "reply": reply})),
+            self.assertRaises(RequestError) as rejected,
+        ):
+            await worker.reconcile(task["id"])
+        self.assertEqual(rejected.exception.code, "receipt_needs_review")
+
     async def test_tool_progress_records_metadata_and_survives_review(self):
         task = self.rpc("submit", **TASK)
         dispatcher = Dispatch("", "tools.mailbox", "tide")
