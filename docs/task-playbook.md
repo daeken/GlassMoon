@@ -16,6 +16,25 @@
 
 For a queued task with zero attempts, use `/resolve ID REVISION cancel NOTE` to withdraw it before delivery. If an agent claims it first, read the new state before taking further action.
 
+## Try a linked handoff offline
+
+Start the README's offline stack without `--smoke` and copy the announced socket path. From the checkout, start a second agent in another terminal, using a state file in the same stack directory. Start the dispatcher in a third terminal if the manifest does not already include it.
+
+```sh
+uv run --locked python -m glassmoon.agent --socket "$GLASSMOON_SOCKET" \
+  --name tide --state "$(dirname "$GLASSMOON_SOCKET")/tide.db"
+uv run --locked python -m glassmoon.dispatcher --socket "$GLASSMOON_SOCKET" --discover
+```
+
+In the TUI, use `/queue moon Check the local handoff` and copy the returned parent ID. Submit the child through the mailbox CLI, replacing `PARENT_ID` with that ID.
+
+```sh
+uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call tools.mailbox invoke \
+  '{"name":"submit","arguments":{"sender":"operator","agent":"tide","key":"offline-check-v1","task":"Confirm the handoff arrived","parent":"PARENT_ID"}}'
+```
+
+Use `/children PARENT_ID` to find the linked child and `/task CHILD_ID` to read its echoed reply. Use a fresh key for each new drill. The offline provider echoes the assigned text. With a model that supports tool calling and the mailbox enabled, Moon can submit the linked child itself.
+
 ## Review a run
 
 Find the parent task with `/tasks`, then open `/task ID` and `/children ID`. Use `/timeline ID` on the relevant child. For example, if Moon asks Finch to extract Markdown headings, the timeline can show that the headings tool returned. Finch's recorded reply contains the heading text. When a task needs review, check its durable receipt with `/reconcile ID` and verify any remaining effects before recording a resolution.

@@ -282,6 +282,8 @@ Use `/review` for tasks that need a decision. `/review PARENT` shows only the ch
 
 Use `/handoff` when taking over a running stack. It shows review items first, followed by running, queued, and recently completed work, with an online check, last recorded activity, and links to the task details.
 
+The [task handoff playbook](docs/task-playbook.md) includes a two-agent offline exercise and a worked recovery after a lost acknowledgment.
+
 If a turn exhausts its tool budget or the model fails after tool calls, the agent saves a partial report in its transcript. The mailbox keeps that task in review so the operator can check the effects before retrying.
 
 When delivery is rejected before the agent starts, the mailbox schedules a short retry delay. Other ready tasks can be claimed during that delay.
