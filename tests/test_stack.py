@@ -9,10 +9,27 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from glassmoon.ipc import call, connect
+from glassmoon.stack import manifest
 from glassmoon.toolbox import call_tool
 
 
 class StackTests(unittest.IsolatedAsyncioTestCase):
+    def test_manifest_rejects_invalid_command_and_environment_types_before_launch(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder, "stack.toml")
+            for error, content in (
+                ("broker command", "broker = [17]\n"),
+                ("worker needs a command", 'command = ["", "arg"]\n'),
+                ("environment values", 'command = ["worker"]\nenv = { KEY = 10 }\n'),
+                ("pass_env must be an array", 'command = ["worker"]\npass_env = "KEY"\n'),
+            ):
+                with self.subTest(error=error):
+                    if not content.startswith("broker"):
+                        content = 'broker = ["broker"]\n[[worker]]\nname = "worker"\n' + content
+                    path.write_text(content)
+                    with self.assertRaisesRegex(ValueError, error):
+                        manifest(path)
+
     async def test_stack_timeout_names_failed_readiness_probe(self):
         with TemporaryDirectory(prefix="gm-stack-probe-", dir="/tmp") as root:
             folder = Path(root)

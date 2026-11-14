@@ -22,8 +22,8 @@ CLEAN_ENV = ("PATH", "LANG", "LC_ALL", "TMPDIR")
 def manifest(path):
     with path.open("rb") as source:
         data = tomllib.load(source)
-    if not isinstance(data.get("broker"), list) or not data["broker"]:
-        raise ValueError("Manifest needs a broker command array")
+    if not command_array(data.get("broker")):
+        raise ValueError("Manifest needs a broker command array of strings")
     workers = data.get("worker", [])
     if not isinstance(workers, list):
         raise TypeError("Workers use [[worker]] entries")
@@ -42,8 +42,16 @@ def manifest(path):
                 "Worker names must be unique and contain only letters, digits, dots, underscores, or hyphens"
             )
         names.add(name)
-        if not isinstance(worker.get("command"), list) or not worker["command"]:
-            raise ValueError(f"Worker {name} needs a command array")
+        if not command_array(worker.get("command")):
+            raise ValueError(f"Worker {name} needs a command array of strings")
+        environment = worker.get("env", {})
+        if not isinstance(environment, dict) or any(
+            not isinstance(value, str) for value in environment.values()
+        ):
+            raise ValueError(f"Worker {name} environment values must be strings")
+        pass_env = worker.get("pass_env", [])
+        if not isinstance(pass_env, list) or any(not isinstance(key, str) for key in pass_env):
+            raise ValueError(f"Worker {name} pass_env must be an array of names")
         probe = worker.get("probe")
         if probe is not None and (
             not isinstance(probe, dict)
@@ -55,6 +63,10 @@ def manifest(path):
                 f"Worker {name} needs a probe method and JSON object arguments"
             )
     return data
+
+
+def command_array(value):
+    return isinstance(value, list) and bool(value) and all(isinstance(item, str) for item in value) and bool(value[0])
 
 
 def render(value, variables):
