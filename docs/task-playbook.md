@@ -7,6 +7,7 @@
 - `/tasks` — list tasks and their current status.
 - `/task ID` — inspect a task and any recorded result.
 - `/children ID` — find tasks delegated from this task.
+- `/review [PARENT]` — list tasks with uncertain outcomes. Supply a parent ID to see only its children.
 - `/timeline ID` — see recorded claims, tool calls, replies, and review decisions across attempts.
 - `/reconcile ID` — recover a completed agent receipt for a task awaiting review.
 - `/resolve ID REVISION ACTION NOTE` — record an explicit resolution after checking the task effects.
