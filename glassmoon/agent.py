@@ -20,7 +20,7 @@ from .models import (
     within_reply_limit,
 )
 from .service import fail, method, serve, service_args
-from .toolbox import call_tool, list_tools, validate_name
+from .toolbox import call_tool, tool_catalog, validate_name
 from .workspace_tools import Workspace
 
 METHODS = {
@@ -113,7 +113,7 @@ class Agent:
         for service in self.tool_services:
             try:
                 async with asyncio.timeout(5):
-                    remote = await list_tools(self.socket, service)
+                    generation, remote = await tool_catalog(self.socket, service)
                 image_names = {
                     tool["name"] for tool in remote if tool.get("returns_image") is True
                 }
@@ -132,14 +132,17 @@ class Agent:
                 ]
                 definitions = functions.definitions({"tools": updated})
                 routes.update(
-                    (name, (service, tool["name"])) for name, tool in additions.items()
+                    (name, (service, tool["name"], generation))
+                    for name, tool in additions.items()
                 )
                 images.update(
                     name
                     for name, tool in additions.items()
                     if tool["name"] in image_names
                 )
-                status[service] = {"state": "available", "count": len(additions)}
+                status[service] = {
+                    "state": "available", "count": len(additions), "generation": generation,
+                }
             except (
                 RequestError,
                 ProtocolError,
@@ -162,14 +165,20 @@ class Agent:
 
     async def execute(self, item, routes):
         if item["name"] in routes:
-            service, name = routes[item["name"]]
+            service, name, generation = routes[item["name"]]
             try:
                 return {
                     "value": await call_tool(
-                        self.socket, service, name, json.loads(item["arguments"])
+                        self.socket, service, name, json.loads(item["arguments"]),
+                        generation=generation,
                     )
                 }
             except RequestError as error:
+                if error.code == "generation_unavailable" and error.generation is None:
+                    return {
+                        "error": "tool_changed",
+                        "message": f"{service} changed during this turn. A new turn will discover its current tools.",
+                    }
                 return {"error": error.code, "message": str(error)}
             except (ProtocolError, OSError, EOFError, ValueError):
                 return {"error": "tool_failed", "message": f"Could not call {service}"}

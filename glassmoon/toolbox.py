@@ -99,9 +99,15 @@ async def list_tools(socket, service):
     return response["tools"]
 
 
-async def call_tool(socket, service, name, arguments):
+async def tool_catalog(socket, service):
+    response = await call(socket, service, "tools", {}, envelope=True)
+    return response["generation"], response["result"]["tools"]
+
+
+async def call_tool(socket, service, name, arguments, *, generation=None):
     response = await call(
-        socket, service, "invoke", {"name": name, "arguments": arguments}
+        socket, service, "invoke", {"name": name, "arguments": arguments},
+        generation=generation,
     )
     return response["value"]
 

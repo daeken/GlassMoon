@@ -116,12 +116,14 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             )
             tool = AsyncMock(return_value={"structuredContent": {"result": 42}})
             with (
-                patch("glassmoon.agent.list_tools", AsyncMock(return_value=discovered)),
+                patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(14, discovered))),
                 patch("glassmoon.agent.call_tool", tool),
                 patch("glassmoon.agent.call", generate),
             ):
                 await agent.handle("chat", {"text": "add"}, ignore, False)
-            tool.assert_awaited_once_with("", "mcp.math", "add", {"a": 12, "b": 30})
+            tool.assert_awaited_once_with(
+                "", "mcp.math", "add", {"a": 12, "b": 30}, generation=14
+            )
             exchange = generate.await_args.args[3]["tool_history"][0]
             self.assertEqual(
                 json.loads(exchange["outputs"]["tool1"])["value"]["structuredContent"][

@@ -118,6 +118,8 @@ uv run --locked python -m glassmoon.mcp_bridge --socket "$GLASSMOON_SOCKET" \
 
 For a Streamable HTTP MCP server, use `--url` in place of the local command. `--bearer-env` selects the environment variable holding its bearer token. For local stdio servers, `--pass-env NAME` forwards a named environment variable.
 
+An agent turn calls the same tool generation that described its tools. If a service changes during the turn, a stale call returns `tool_changed`. The next turn discovers the replacement's definitions.
+
 Launch or replace an agent with `--tool-service tools.moon --tool-service mcp.math`. It discovers the current tools before each turn and sees them as `tools_moon__text_budget` and `mcp_math__multiply`. The same tools are callable from Python, including an agent's `python_eval`.
 
 ```python

@@ -7,11 +7,16 @@ import unittest
 from contextlib import AsyncExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import AsyncMock, patch
 
+from glassmoon.agent import Agent
 from glassmoon.echo import METHODS
 from glassmoon.ipc import RequestError, call, connect
+from glassmoon.models import Transcripts
 from glassmoon.release import release
 from glassmoon.service import serve
+from glassmoon.toolbox import METHODS as TOOL_METHODS
+from glassmoon.toolbox import ToolService, tool
 
 BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
@@ -231,6 +236,61 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
                 await call(socket, "echo", "echo", {}, generation=generation)
             self.assertEqual(stale.exception.code, "generation_unavailable")
             self.assertFalse(worker.done())
+
+    async def test_agent_rejects_changed_tool_generation_until_next_turn(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(10):
+            socket = await self.start_broker(stack, 5000)
+            store = Transcripts(socket.with_name("agent.db"))
+            stack.callback(store.close)
+            agent = Agent(socket, "moon", "models", {}, "", store, tool_services=["tools.fixture"])
+            calls = []
+
+            async def start(label, previous=None):
+                async def invoke(name, args):
+                    calls.append((label, name, args))
+                    return label
+
+                ready = asyncio.Event()
+                service = ToolService({"note": tool(f"Note operation {label}")}, invoke)
+                worker = asyncio.create_task(serve(
+                    socket, "tools.fixture", previous, TOOL_METHODS, service.handle,
+                    on_ready=ready.set,
+                ))
+
+                async def stop():
+                    worker.cancel()
+                    await asyncio.gather(worker, return_exceptions=True)
+
+                stack.push_async_callback(stop)
+                await ready.wait()
+
+            await start("first")
+            original = (await agent.handle("tool_status", {}, None, False))["services"]
+            tool_request = {
+                "provider": "demo", "model": "test",
+                "message": {"role": "assistant", "content": ""},
+                "tool_calls": [{"id": "first", "name": "tools_fixture__note", "arguments": "{}"}],
+            }
+            changed = False
+
+            async def router(_socket, _service, _method, params, **_kwargs):
+                nonlocal changed
+                if "tool_history" in params:
+                    seen.append(params["tool_history"][0]["outputs"]["first"])
+                    return {"message": {"role": "assistant", "content": "Read the tool result"}}
+                if not changed:
+                    await start("replacement", original["tools.fixture"]["generation"])
+                    changed = True
+                return tool_request
+
+            seen = []
+            with patch("glassmoon.agent.call", AsyncMock(side_effect=router)):
+                await agent.handle("chat", {"text": "Try the note operation"}, None, False)
+                self.assertEqual(calls, [])
+                self.assertIn('"error": "tool_changed"', seen[0])
+                await agent.handle("chat", {"text": "Try again with the current tool"}, None, False)
+            self.assertEqual(calls, [("replacement", "note", {})])
+            self.assertIn('"value": "replacement"', seen[1])
 
 
 if __name__ == "__main__":

@@ -79,9 +79,10 @@ async def connect(path):
 
 
 async def call(
-    path, service, method, params, *, on_chunk=None, version=1, generation=None
+    path, service, method, params, *, on_chunk=None, version=1, generation=None,
+    envelope=False,
 ):
-    """Call a service and await its final result, optionally handling chunks."""
+    """Call a service, optionally returning the response envelope with its generation."""
     async with connect(path) as wire:
         await wire.send(
             "call",
@@ -104,6 +105,6 @@ async def call(
                     raise RequestError(
                         message["error"], generation=message.get("generation")
                     )
-                return message["result"]
+                return message if envelope else message["result"]
             else:
                 raise ProtocolError("Unexpected call response")
