@@ -137,10 +137,23 @@ class Agent:
             for service, mode in policy["overrides"].items()
             if mode == "disable"
         }
-        for service in policy["enabled"]:
+        async def fetch(service):
             try:
                 async with asyncio.timeout(5):
-                    generation, remote = await tool_catalog(self.socket, service)
+                    return await tool_catalog(self.socket, service)
+            except (
+                RequestError, ProtocolError, EOFError, OSError, TimeoutError,
+                ValueError, KeyError, TypeError,
+            ):
+                return None
+
+        services = policy["enabled"]
+        catalogs = await asyncio.gather(*(fetch(service) for service in services))
+        for service, catalog in zip(services, catalogs, strict=True):
+            try:
+                if catalog is None:
+                    raise fail("tool_unavailable", "Tool catalog could not be read")
+                generation, remote = catalog
                 image_names = {
                     tool["name"] for tool in remote if tool.get("returns_image") is True
                 }
@@ -170,16 +183,7 @@ class Agent:
                 status[service] = {
                     "state": "available", "count": len(additions), "generation": generation,
                 }
-            except (
-                RequestError,
-                ProtocolError,
-                EOFError,
-                OSError,
-                TimeoutError,
-                KeyError,
-                TypeError,
-                AttributeError,
-            ):
+            except (RequestError, KeyError, TypeError, AttributeError):
                 status[service] = {"state": "unavailable", "count": 0}
                 if stream:
                     await emit(

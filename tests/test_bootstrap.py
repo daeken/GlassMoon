@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import tempfile
@@ -118,6 +119,27 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             policy = await change(replacement, "mcp.new", "default", 3)
             self.assertEqual(policy["enabled"], ["mcp.base", "mcp.fresh"])
             self.assertEqual(policy["overrides"], {})
+
+    async def test_probe_shared_tools_concurrently_and_keep_configured_priority(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {}, "", store, tool_services=["tool.a", "tool_a"])
+            second_started = asyncio.Event()
+            definitions = [{"name": "run", "description": "Fixture", "parameters": {"type": "object"}}]
+
+            async def catalog(_socket, service):
+                if service == "tool.a":
+                    await asyncio.wait_for(second_started.wait(), 0.3)
+                    return 3, definitions
+                second_started.set()
+                return 4, definitions
+
+            with patch("glassmoon.agent.tool_catalog", side_effect=catalog):
+                status = await agent.handle("tool_status", {}, ignore, False)
+            self.assertEqual(status["services"]["tool.a"]["generation"], 3)
+            self.assertEqual(status["services"]["tool_a"]["state"], "unavailable")
+            self.assertEqual([tool["service"] for tool in status["tools"]], ["tool.a"])
 
     async def test_summary_survives_agent_restart_and_keeps_history(self):
         with tempfile.TemporaryDirectory() as folder:

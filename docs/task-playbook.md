@@ -6,9 +6,14 @@
 - `/queue-check AGENT CHECK | TASK` — queue a task with a check to perform if its outcome becomes uncertain.
 - `/tasks` — list tasks and their current status.
 - `/task ID` — inspect a task and any recorded result.
-- `/reconcile ID` — recover a completed agent receipt for a task awaiting review. This is not a command to blindly rerun work.
-
+- `/children ID` — find tasks delegated from this task.
+- `/timeline ID` — see recorded claims, tool calls, replies, and review decisions across attempts.
+- `/reconcile ID` — recover a completed agent receipt for a task awaiting review.
 - `/resolve ID REVISION ACTION NOTE` — record an explicit resolution after checking the task effects.
+
+## Review a run
+
+Find the parent task with `/tasks`, then open `/task ID` and `/children ID`. Use `/timeline ID` on the relevant child. For example, if Moon asks Finch to extract Markdown headings, the timeline can show that the headings tool returned. Finch's recorded reply contains the heading text. When a task needs review, check its durable receipt with `/reconcile ID` and verify any remaining effects before recording a resolution.
 
 ## Ambiguous outcomes
 
