@@ -483,13 +483,17 @@ impl Broker {
             State::Active => "active",
             State::Draining { .. } => "draining",
         };
-        json!({
+        let mut summary = json!({
             "name": service.interface.name,
             "generation": id,
             "interface_version": service.interface.interface_version,
             "state": state,
             "in_flight": service.in_flight,
-        })
+        });
+        if let Some(kind) = service.interface.kind {
+            summary["kind"] = json!(kind);
+        }
+        summary
     }
 
     fn publish(&mut self, event: &str, service: Value) {

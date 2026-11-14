@@ -200,7 +200,9 @@ async def run(args):
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=15)) as client:
             provider = OpenAI(profile, client, catalog, transcripts)
-            await serve(args.socket, args.name, args.replace, METHODS, provider.handle)
+            await serve(
+                args.socket, args.name, args.replace, METHODS, provider.handle, kind="model_provider",
+            )
     finally:
         transcripts.close()
 

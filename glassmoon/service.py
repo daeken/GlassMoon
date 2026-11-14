@@ -53,13 +53,15 @@ async def invoke(wire, message, handler):
     )
 
 
-async def serve(socket, name, replace, methods, handler):
+async def serve(socket, name, replace, methods, handler, *, kind=None, on_ready=None):
     async with connect(socket) as wire:
         registration = await wire.request(
-            "register", "register", name=name, interface_version=1, methods=methods,
+            "register", "register", name=name, interface_version=1, methods=methods, kind=kind,
         )
         await wire.request("promote", "promote", expected_active=replace)
         print(f"{name} active as generation {registration['result']['generation']}", flush=True)
+        if on_ready is not None:
+            on_ready()
         async with asyncio.TaskGroup() as group:
             tasks = set()
             try:

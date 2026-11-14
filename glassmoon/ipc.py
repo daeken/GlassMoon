@@ -25,7 +25,7 @@ class Wire:
         self.reader = reader
         self.writer = writer
 
-    async def send(self, kind, **fields):
+    async def send(self, kind, /, **fields):
         frame = json.dumps(
             {"type": kind, **fields},
             ensure_ascii=False,
@@ -51,7 +51,7 @@ class Wire:
             raise ProtocolError("Expected a JSON object")
         return message
 
-    async def request(self, kind, request_id, **fields):
+    async def request(self, kind, request_id, /, **fields):
         """Send one request when no other replies or events are expected."""
         await self.send(kind, id=request_id, **fields)
         message = await self.receive()

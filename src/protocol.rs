@@ -66,6 +66,14 @@ pub struct Interface {
     pub name: String,
     pub interface_version: u32,
     pub methods: BTreeMap<String, Method>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<InterfaceKind>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceKind {
+    ModelProvider,
 }
 
 #[derive(Deserialize, Serialize)]
