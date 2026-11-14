@@ -36,7 +36,7 @@ def validate_name(name):
 
 
 class ToolService:
-    def __init__(self, functions, invoke):
+    def __init__(self, functions, invoke, *, source_sha256=None):
         self.functions = {validate_name(name): spec for name, spec in functions.items()}
         if any(
             type(spec.get("returns_image", False)) is not bool
@@ -44,10 +44,14 @@ class ToolService:
         ):
             raise ValueError("returns_image must be a boolean")
         self.invoke = invoke
+        self.source_sha256 = source_sha256
 
     async def handle(self, name, params, _emit, _stream):
         if name == "health":
-            return {"status": "ok", "tools": len(self.functions)}
+            result = {"status": "ok", "tools": len(self.functions)}
+            if self.source_sha256 is not None:
+                result["source_sha256"] = self.source_sha256
+            return result
         if name == "tools":
             return {
                 "tools": [
@@ -102,7 +106,7 @@ def load(path, expected_sha256=None):
             return await handler(**arguments)
         return await asyncio.to_thread(handler, **arguments)
 
-    return ToolService(module.TOOLS, invoke)
+    return ToolService(module.TOOLS, invoke, source_sha256=expected_sha256)
 
 
 async def list_tools(socket, service):

@@ -293,7 +293,10 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             )
             source_hash = hashlib.sha256(plugin.read_bytes()).hexdigest()
             published = load(plugin, source_hash)
-            self.assertEqual(await published.handle("health", {}, ignore, False), {"status": "ok", "tools": 1})
+            self.assertEqual(
+                await published.handle("health", {}, ignore, False),
+                {"status": "ok", "tools": 1, "source_sha256": source_hash},
+            )
             response = await published.handle(
                 "invoke",
                 {"name": "multiply", "arguments": {"a": 6, "b": 7}},
