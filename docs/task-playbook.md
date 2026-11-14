@@ -7,9 +7,11 @@
 - `/task ID` — inspect a task and any recorded result.
 - `/reconcile ID` — recover a completed agent receipt for a task awaiting review. This is not a command to blindly rerun work.
 
+- `/resolve ID REVISION ACTION NOTE` — record an explicit resolution after checking the task effects.
+
 ## Ambiguous outcomes
 
-A timeout or worker exit does not prove that a tool had no effect. Ambiguous work stays in review until its receipt and effects can be checked. Do not automatically replay it. Reconciliation can recover a completed receipt; if no reliable receipt exists, a human must decide whether to requeue or cancel after checking effects.
+A timeout or worker exit does not prove that a tool had no effect. Ambiguous work stays in review until its receipt and effects can be checked. Do not automatically replay it. Reconciliation can recover a completed receipt; if no reliable receipt exists, record independently verified completion with `verified`, requeue when a retry is warranted, or cancel the task.
 
 ## Conceptual local receipt simulation
 

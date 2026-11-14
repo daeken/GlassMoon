@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Barrier
 from unittest.mock import AsyncMock, patch
 
+from examples.handoff_fixture import HandoffFixture
 from glassmoon.agent import Agent
 from glassmoon.dispatcher import Dispatch
 from glassmoon.ipc import RequestError
@@ -277,3 +278,29 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
                 },
             ],
         )
+
+    def test_verified_external_effect_closes_review_without_replay(self):
+        task = self.rpc("submit", **TASK)
+        self.rpc("claim", agent="tide", lease_seconds=5)
+        fixture_path = self.path.with_name("fixture.sqlite")
+        with HandoffFixture(fixture_path) as fixture:
+            expected = fixture.apply(task["id"], "Saved before losing the reply")[
+                "receipt"
+            ]
+        self.now += 6
+        review = self.rpc("get", id=task["id"])
+        self.assertEqual(review["status"], "review")
+        with HandoffFixture(fixture_path) as fixture:
+            evidence = fixture.lookup(task["id"])
+            self.assertEqual(evidence, expected)
+            self.assertEqual(fixture.count(), 1)
+        result = self.rpc(
+            "review",
+            id=task["id"],
+            expected_revision=review["revision"],
+            action="verified",
+            note=f"Confirmed fixture receipt {evidence['receipt_id']}",
+        )
+        self.assertEqual((result["status"], result["attempts"]), ("done", 1))
+        self.assertEqual(result["result"], "Confirmed fixture receipt 1")
+        self.assertIsNone(self.rpc("claim", agent="tide", lease_seconds=5)["task"])

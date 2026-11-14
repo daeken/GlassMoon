@@ -230,11 +230,32 @@ class Terminal:
         if task["status"] == "review":
             self.log(
                 "status",
-                "Outcome unknown. Check the saved receipt with /reconcile ID or verify effects before retrying.",
+                "Outcome unknown. Use /reconcile ID to check the receipt. Use /resolve ID REVISION ACTION NOTE after verifying effects.",
             )
 
     async def reconcile_task(self, identifier):
         await call_tool(self.socket, self.mailbox, "reconcile", {"id": identifier})
+        await self.show_task(identifier)
+
+    async def resolve_task(self, arguments):
+        fields = arguments.split(maxsplit=3)
+        if len(fields) != 4 or not fields[1].isdecimal():
+            self.log(
+                "status", "Usage /resolve ID REVISION requeue|cancel|verified NOTE"
+            )
+            return
+        identifier, revision, action, note = fields
+        await call_tool(
+            self.socket,
+            self.mailbox,
+            "review",
+            {
+                "id": identifier,
+                "expected_revision": int(revision),
+                "action": action,
+                "note": note,
+            },
+        )
         await self.show_task(identifier)
 
     async def queue_task(self, agent, instruction):
@@ -303,6 +324,7 @@ class Terminal:
                         self.active,
                         "/queue AGENT TASK  /tasks [AGENT]  /task ID  /reconcile ID",
                     )
+                    self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -328,6 +350,9 @@ class Terminal:
                 case "/reconcile" if argument:
                     self.select("status")
                     self.start(lambda: self.reconcile_task(argument))
+                case "/resolve" if argument:
+                    self.select("status")
+                    self.start(lambda: self.resolve_task(argument))
                 case "/services":
                     self.select("status")
                     self.start(self.list_services)

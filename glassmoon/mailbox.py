@@ -25,7 +25,7 @@ TOOLS = {
     ),
     "get": tool("Read a task and any recorded result.", {"id": TEXT}),
     "review": tool(
-        "Resolve a task that may have been interrupted. Choose requeue or cancel after checking its effects.",
+        "Resolve an interrupted task. Choose requeue, cancel, or verified after checking its effects.",
         {"id": TEXT, "action": TEXT, "note": TEXT, "expected_revision": INTEGER},
     ),
     "reconcile": tool(
@@ -302,17 +302,27 @@ class Mailbox:
         return self.get(db, now, id)
 
     def review(self, db, now, id, action, note, expected_revision):
-        if action not in ("requeue", "cancel"):
-            raise fail("invalid_action", "Choose requeue or cancel")
+        if action not in ("requeue", "cancel", "verified"):
+            raise fail("invalid_action", "Choose requeue, cancel, or verified")
         note = content(note, "review note", 2000)
         expected_revision = number(expected_revision, 1, 2**63 - 1, "expected_revision")
-        status = "queued" if action == "requeue" else "cancelled"
+        status = {"requeue": "queued", "cancel": "cancelled", "verified": "done"}[
+            action
+        ]
         changed = db.execute(
             """
-            UPDATE tasks SET status=?, review_note=?, revision=revision+1, updated_at=?
+            UPDATE tasks SET status=?, review_note=?, result=COALESCE(?, result),
+                             revision=revision+1, updated_at=?
             WHERE id=? AND status='review' AND revision=?
         """,
-            (status, note, now, id, expected_revision),
+            (
+                status,
+                note,
+                note if action == "verified" else None,
+                now,
+                id,
+                expected_revision,
+            ),
         ).rowcount
         if not changed:
             raise fail(
