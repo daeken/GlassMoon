@@ -138,6 +138,8 @@ For a Streamable HTTP MCP server, use `--url` in place of the local command. `--
 
 Pass `--image-tool NAME` for an MCP function that returns images. The bridge exposes its first supported, bounded JPEG or PNG as an image tool result, so the router can select a model with image support.
 
+Use `/health SERVICE` on an MCP bridge to check whether the upstream is reachable and whether its advertised tools changed. A `changed` report lists added, removed, and modified tools. Stage and probe a replacement bridge to adopt the new definitions.
+
 An agent turn calls the same tool generation that described its tools. If a service changes during the turn, a stale call returns `tool_changed`. The next turn discovers the replacement's definitions.
 
 Use `/describe-tool SERVICE TOOL` to inspect one shared tool's inputs and the generation that advertised them.

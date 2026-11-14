@@ -39,6 +39,23 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mcp_health_reports_upstream_catalog_changes_without_swapping_tools(self):
+        bridge = Bridge("fixture")
+        published = {"removed": {}, "changed": {"description": "old"}, "same": {}}
+        upstream = {"added": {}, "changed": {"description": "new"}, "same": {}}
+        with patch.object(bridge, "tools", AsyncMock(side_effect=[published, upstream, OSError()])):
+            healthy = await bridge.check_catalog(None, published)
+            self.assertEqual((healthy["status"], healthy["tools"]), ("ok", 3))
+            report = await bridge.check_catalog(None, published)
+            self.assertEqual(report, {
+                "status": "changed", "tools": 3, "change_count": 3,
+                "added": ["added"], "removed": ["removed"], "changed": ["changed"],
+            })
+            self.assertEqual(published["changed"], {"description": "old"})
+            with self.assertRaises(RequestError) as unavailable:
+                await bridge.check_catalog(None, published)
+            self.assertEqual(unavailable.exception.code, "mcp_catalog_unavailable")
+
     def test_compaction_omits_inline_attachments_and_signed_url_details(self):
         compacted = compactable_turn([{
             "role": "user",

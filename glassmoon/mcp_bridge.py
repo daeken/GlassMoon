@@ -55,6 +55,24 @@ class Bridge:
                     return tools
         raise fail("mcp_catalog", "MCP tool catalog exceeds the page limit")
 
+    async def check_catalog(self, client, registered):
+        try:
+            current = await self.tools(client)
+        except Exception as error:  # noqa: BLE001 - upstream failures can contain connection details.
+            raise fail("mcp_catalog_unavailable", f"Could not read the MCP catalog ({type(error).__name__})") from None
+        changes = {
+            "added": sorted(current.keys() - registered.keys()),
+            "removed": sorted(registered.keys() - current.keys()),
+            "changed": sorted(name for name in registered.keys() & current.keys() if registered[name] != current[name]),
+        }
+        total_changes = sum(map(len, changes.values()))
+        return {
+            "status": "changed" if total_changes else "ok",
+            "tools": len(current),
+            "change_count": total_changes,
+            **{kind: [name[:128] for name in names[:12]] for kind, names in changes.items()},
+        }
+
     async def invoke(self, client, name, arguments):
         try:
             async with asyncio.timeout(MCP_TIMEOUT):
@@ -121,12 +139,18 @@ async def run(args):
             return await bridge.invoke(client, name, arguments)
 
         service = ToolService(functions, invoke)
+
+        async def handle(name, params, emit, stream):
+            if name == "health":
+                return await bridge.check_catalog(client, functions)
+            return await service.handle(name, params, emit, stream)
+
         await serve(
             args.socket,
             args.name,
             args.replace,
             METHODS,
-            service.handle,
+            handle,
             staged=args.staged,
             reconnect=True,
             maintainer=args.maintainer,
