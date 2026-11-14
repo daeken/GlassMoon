@@ -253,8 +253,10 @@ class Terminal:
         membership = "enabled" if service in updated["enabled"] else "disabled"
         self.log(window, f"{service} {membership} for new turns. Use /tools to check availability.")
 
-    async def list_tasks(self, agent):
+    async def list_tasks(self, agent=None, parent=None):
         params = {"agent": agent} if agent else {}
+        if parent is not None:
+            params["parent"] = parent
         response = await call_tool(self.socket, self.mailbox, "list_tasks", params)
         if not response["tasks"]:
             self.log("status", "No tasks.")
@@ -275,6 +277,8 @@ class Terminal:
             "status", f"{task['id']}  {task['status']}  revision {task['revision']}"
         )
         self.log("status", task["task"])
+        if task.get("parent"):
+            self.log("status", f"Parent task {task['parent']}")
         if task.get("recovery_check"):
             self.log("status", f"Recovery check from submitter — {task['recovery_check']}")
         for line in dict.fromkeys((task["result"], task["review_note"])):
@@ -424,6 +428,7 @@ class Terminal:
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
+                    self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                 case "/status":
@@ -468,6 +473,9 @@ class Terminal:
                 case "/timeline" if argument:
                     self.select("status")
                     self.start(lambda: self.task_timeline(argument))
+                case "/children" if argument:
+                    self.select("status")
+                    self.start(lambda: self.list_tasks(parent=argument))
                 case "/reconcile" if argument:
                     self.select("status")
                     self.start(lambda: self.reconcile_task(argument))

@@ -88,7 +88,8 @@ class Dispatch:
             f"GlassMoon task {task['id']} assigned by {task['sender']} (attempt {task['attempts']}).\n\n"
             f"{task['task']}\n\n"
             "Perform the requested work within your configured tools and report what you verified. "
-            "If you cannot complete it, describe the blocker and any effects already observed."
+            "If you cannot complete it, describe the blocker and any effects already observed. "
+            "When delegating from this task through the mailbox, set parent to its task ID."
             f"{recovery_context}"
         )
         heartbeat = asyncio.create_task(self.heartbeat(lease))

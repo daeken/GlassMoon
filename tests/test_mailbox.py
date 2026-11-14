@@ -410,3 +410,22 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.startswith(reply["result"]))
         self.assertEqual(self.rpc("get", id=task["id"]), reply)
         self.assertEqual(self.rpc("submit", **values), reply)
+
+    def test_delegated_tasks_link_to_a_real_parent(self):
+        parent = self.rpc("submit", **TASK)
+        other = self.rpc("submit", **(TASK | {"key": "other"}))
+        args = TASK | {"sender": "tide", "agent": "finch", "key": "child"}
+        with self.assertRaises(RequestError) as rejected:
+            self.rpc("submit", **args, parent="missing")
+        self.assertEqual(rejected.exception.code, "unknown_parent")
+        child = self.rpc("submit", **args, parent=parent["id"])
+        self.assertEqual(child["parent"], parent["id"])
+        self.assertEqual(self.rpc("submit", **args, parent=parent["id"]), child)
+        with self.assertRaises(RequestError) as conflict:
+            self.rpc("submit", **args, parent=other["id"])
+        self.assertEqual(conflict.exception.code, "key_conflict")
+        self.box = Mailbox(self.path, clock=lambda: self.now)
+        self.assertEqual(
+            [row["id"] for row in self.rpc("list_tasks", parent=parent["id"])["tasks"]],
+            [child["id"]],
+        )

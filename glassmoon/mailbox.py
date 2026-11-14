@@ -18,11 +18,11 @@ TOOLS = {
     "submit": tool(
         "Queue a task for an agent. Retries using the same sender and key return the original task.",
         {"sender": TEXT, "agent": TEXT, "key": TEXT, "task": TEXT},
-        {"recovery_check": TEXT},
+        {"recovery_check": TEXT, "parent": TEXT},
     ),
     "list_tasks": tool(
         "List tasks newest first. Optionally filter by agent, status or cursor.",
-        optional={"agent": TEXT, "status": TEXT, "before": INTEGER, "limit": INTEGER},
+        optional={"agent": TEXT, "status": TEXT, "parent": TEXT, "before": INTEGER, "limit": INTEGER},
     ),
     "get": tool("Read a task and any recorded result.", {"id": TEXT}),
     "timeline": tool(
@@ -91,7 +91,7 @@ class Mailbox:
                     key TEXT NOT NULL, task TEXT NOT NULL, status TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1, attempts INTEGER NOT NULL DEFAULT 0,
                     token TEXT, lease_until REAL, result TEXT, review_note TEXT,
-                    recovery_check TEXT,
+                    recovery_check TEXT, parent TEXT REFERENCES tasks(id),
                     created_at REAL NOT NULL, updated_at REAL NOT NULL,
                     UNIQUE(sender, key)
                 );
@@ -116,10 +116,12 @@ class Mailbox:
                 CREATE INDEX IF NOT EXISTS task_history ON task_events(task_id, seq);
             """)
             db.execute("BEGIN IMMEDIATE")
-            if "recovery_check" not in {
-                field[1] for field in db.execute("PRAGMA table_info(tasks)")
-            }:
+            fields = {field[1] for field in db.execute("PRAGMA table_info(tasks)")}
+            if "recovery_check" not in fields:
                 db.execute("ALTER TABLE tasks ADD COLUMN recovery_check TEXT")
+            if "parent" not in fields:
+                db.execute("ALTER TABLE tasks ADD COLUMN parent TEXT REFERENCES tasks(id)")
+            db.execute("CREATE INDEX IF NOT EXISTS task_children ON tasks(parent, seq)")
 
     @contextmanager
     def transaction(self):
@@ -184,7 +186,7 @@ class Mailbox:
             "before": rows[19]["seq"] if len(rows) > 20 else None,
         }
 
-    def submit(self, db, now, sender, agent, key, task, recovery_check=None):
+    def submit(self, db, now, sender, agent, key, task, recovery_check=None, parent=None):
         sender, agent, key = (
             label(value, name)
             for name, value in (("sender", sender), ("agent", agent), ("key", key))
@@ -192,12 +194,16 @@ class Mailbox:
         task = content(task, "task", 4000)
         if recovery_check is not None:
             recovery_check = content(recovery_check, "recovery check", 1200)
+        if parent is not None:
+            parent = label(parent, "parent task")
+            if not db.execute("SELECT 1 FROM tasks WHERE id=?", (parent,)).fetchone():
+                raise fail("unknown_parent", "The parent task does not exist")
         row = db.execute(
             "SELECT * FROM tasks WHERE sender=? AND key=?", (sender, key)
         ).fetchone()
         if row:
-            if (row["agent"], row["task"], row["recovery_check"]) != (
-                agent, task, recovery_check,
+            if (row["agent"], row["task"], row["recovery_check"], row["parent"]) != (
+                agent, task, recovery_check, parent,
             ):
                 raise fail(
                     "key_conflict",
@@ -207,10 +213,10 @@ class Mailbox:
         identifier = uuid.uuid4().hex
         db.execute(
             """
-            INSERT INTO tasks(id, sender, agent, key, task, recovery_check, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+            INSERT INTO tasks(id, sender, agent, key, task, recovery_check, parent, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
         """,
-            (identifier, sender, agent, key, task, recovery_check, now, now),
+            (identifier, sender, agent, key, task, recovery_check, parent, now, now),
         )
         self.event(db, now, identifier, 0, "submitted")
         return self.get(db, now, identifier)
@@ -274,23 +280,26 @@ class Mailbox:
         self.event(db, now, id, task["attempts"], "tool", name, phase)
         return {"recorded": True}
 
-    def list_tasks(self, db, _now, agent=None, status=None, before=None, limit=20):
+    def list_tasks(self, db, _now, agent=None, status=None, parent=None, before=None, limit=20):
         if agent is not None:
             label(agent, "agent")
         if status is not None and status not in STATES:
             raise fail("invalid_status", "Unknown task status")
+        if parent is not None:
+            label(parent, "parent task")
         limit = number(limit, 1, 50, "limit")
         before = (
             number(before, 1, 2**63 - 1, "before") if before is not None else 2**63 - 1
         )
         rows = db.execute(
             """
-            SELECT seq, id, sender, agent, key, status, revision, attempts, created_at, updated_at
+            SELECT seq, id, sender, agent, key, status, revision, attempts, parent, created_at, updated_at
               FROM tasks
              WHERE seq < ? AND (? IS NULL OR agent=?) AND (? IS NULL OR status=?)
+                   AND (? IS NULL OR parent=?)
              ORDER BY seq DESC LIMIT ?
         """,
-            (before, agent, agent, status, status, limit + 1),
+            (before, agent, agent, status, status, parent, parent, limit + 1),
         ).fetchall()
         return {
             "tasks": [dict(row) for row in rows[:limit]],
