@@ -13,41 +13,28 @@ def print_json(value):
 
 
 async def run(args):
-    if args.command == "call" and args.stream:
+    if args.command == "call":
 
         async def chunk(data):
             print_json({"type": "chunk", "data": data})
 
-        result = await call(
+        reply = await call(
             args.socket,
             args.service,
             args.method,
             args.params,
             version=args.interface_version,
-            on_chunk=chunk,
+            on_chunk=chunk if args.stream else None,
             generation=args.generation,
+            envelope=not args.stream,
         )
-        print_json({"type": "response", "result": result})
+        if args.stream:
+            print_json({"type": "response", "result": reply})
+        else:
+            print_json({"generation": reply["generation"], "result": reply["result"]})
         return
     async with connect(args.socket) as wire:
         match args.command:
-            case "call":
-                reply = await wire.request(
-                    "call",
-                    "cli",
-                    service=args.service,
-                    method=args.method,
-                    params=args.params,
-                    interface_version=args.interface_version,
-                    **(
-                        {"generation": args.generation}
-                        if args.generation is not None
-                        else {}
-                    ),
-                )
-                print_json(
-                    {"generation": reply["generation"], "result": reply["result"]}
-                )
             case "describe":
                 print_json(
                     (await wire.request("describe", "cli", generation=args.generation))[

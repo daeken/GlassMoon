@@ -50,7 +50,17 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
                 await call(socket, "echo", "echo", {"value": "staged only"}, generation=42)
             self.assertEqual(error.exception.code, "unsupported_generation_calls")
             await done.wait()
-            self.assertEqual(received, [b""])
+            done.clear()
+            cli = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "glassmoon", "--socket", socket,
+                "call", "echo", "echo", "--generation", "42",
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await cli.communicate()
+            self.assertEqual(cli.returncode, 1)
+            self.assertIn(b"unsupported_generation_calls", stderr)
+            await done.wait()
+            self.assertEqual(received, [b"", b""])
 
     async def test_exact_call_rejects_a_mismatched_reply(self):
         async with AsyncExitStack() as stack, asyncio.timeout(5):
