@@ -149,6 +149,8 @@ All services on this local socket are trusted. If multiple model providers can s
 
 When a provider asks an agent to use tools, the continuation goes back to the same provider generation. A provider replaced mid-turn can return `provider_changed`. Review any tool effects before trying the task again.
 
+Agent chats and mailbox tasks have no total tool-round cap or whole-run timeout. The agent archives tool calls and results in its own SQLite database. As the active request approaches the IPC frame limit, it replaces large outputs with archive references and compacts earlier exchanges into a progress checkpoint. The model can read an original result in pages with `read_tool_result`. Operators can call `agent.NAME tool_result` with the result ID and an optional character offset. Mailbox tasks keep renewing their lease and continue recording tool progress throughout the run. An interrupted run still requires review before retrying work with side effects.
+
 ## Bootstrap development inside GlassMoon
 
 Agent state keeps the full transcript in SQLite and a separate summary of older complete turns. Agents compact automatically when their unsummarized transcript grows. Use `/compact` in an agent chat or the `compact` RPC to request it explicitly. Use `info` to inspect the covered revision.

@@ -109,11 +109,7 @@ class Dispatch:
 
         async def on_chunk(event):
             nonlocal event_index
-            if (
-                not isinstance(event, dict)
-                or event.get("type") != "tool"
-                or event_index >= 64
-            ):
+            if not isinstance(event, dict) or event.get("type") != "tool":
                 return
             event_index += 1
             try:
@@ -134,32 +130,28 @@ class Dispatch:
         try:
             reply = None
             try:
-                async with asyncio.timeout(245):
-                    try:
-                        reply = await call(
-                            self.socket,
-                            self.agent,
-                            "run_task",
-                            {
-                                "id": task["id"],
-                                "attempt": task["attempts"],
-                                "text": message,
-                            },
-                            on_chunk=on_chunk,
-                        )
-                    except RequestError as error:
-                        if (
-                            error.code != "unknown_method"
-                            or error.generation is not None
-                        ):
-                            raise
-                        reply = await call(
-                            self.socket,
-                            self.agent,
-                            "chat",
-                            {"text": message},
-                            on_chunk=on_chunk,
-                        )
+                try:
+                    reply = await call(
+                        self.socket,
+                        self.agent,
+                        "run_task",
+                        {
+                            "id": task["id"],
+                            "attempt": task["attempts"],
+                            "text": message,
+                        },
+                        on_chunk=on_chunk,
+                    )
+                except RequestError as error:
+                    if error.code != "unknown_method" or error.generation is not None:
+                        raise
+                    reply = await call(
+                        self.socket,
+                        self.agent,
+                        "chat",
+                        {"text": message},
+                        on_chunk=on_chunk,
+                    )
             except RequestError as error:
                 retryable = error.code == "agent_busy" or (
                     error.generation is None and error.code in PRE_ADMISSION_ERRORS

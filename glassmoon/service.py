@@ -7,6 +7,7 @@ import logging
 from .ipc import ProtocolError, RequestError, connect
 
 LOGGER = logging.getLogger(__name__)
+RPC_TIMEOUT = 240
 
 
 def method(description, required=None, optional=None, result=None):
@@ -27,7 +28,7 @@ def fail(code, message):
     return RequestError({"code": code, "message": message})
 
 
-async def invoke(wire, message, handler):
+async def invoke(wire, message, handler, timeout):
     call_id = message["call_id"]
 
     async def emit(data):
@@ -35,7 +36,7 @@ async def invoke(wire, message, handler):
             await wire.send("chunk", call_id=call_id, data=data)
 
     try:
-        async with asyncio.timeout(240):
+        async with asyncio.timeout(timeout):
             result = await handler(
                 message["method"], message["params"], emit, message.get("stream", False)
             )
@@ -76,7 +77,9 @@ async def serve(
     on_ready=None,
     staged=False,
     reconnect=False,
+    long_running=(),
 ):
+    long_running = frozenset(long_running)
     delay = 0.2
     while True:
         ready = False
@@ -104,6 +107,7 @@ async def serve(
                 on_ready=registered,
                 staged=staged,
                 set_active=set_active,
+                long_running=long_running,
             )
         except (EOFError, OSError):
             if not reconnect or (not active and (ready or staged or replace is not None)):
@@ -120,7 +124,8 @@ async def serve(
 
 
 async def _serve_connection(
-    socket, name, replace, methods, handler, *, kind, maintainer, on_ready, staged, set_active
+    socket, name, replace, methods, handler, *, kind, maintainer, on_ready, staged, set_active,
+    long_running,
 ):
     async with connect(socket) as wire:
         registration = await wire.request(
@@ -150,7 +155,8 @@ async def _serve_connection(
                     message = await wire.receive()
                     match message["type"]:
                         case "invoke":
-                            task = group.create_task(invoke(wire, message, handler))
+                            timeout = None if message["method"] in long_running else RPC_TIMEOUT
+                            task = group.create_task(invoke(wire, message, handler, timeout))
                             tasks.add(task)
                             task.add_done_callback(tasks.discard)
                         case "activated":

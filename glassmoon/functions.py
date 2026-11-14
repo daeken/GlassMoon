@@ -5,7 +5,9 @@ import re
 from .service import fail
 
 TOOL_FIELDS = {"tools": {"type": "array"}, "tool_history": {"type": "array"}}
-MAX_FUNCTIONS = 32
+MAX_AGENT_FUNCTIONS = 32
+# An agent can also offer a built-in reader for its archived tool results.
+MAX_FUNCTIONS = MAX_AGENT_FUNCTIONS + 1
 
 
 DATA_IMAGE = re.compile(r"data:image/(?:jpeg|png);base64,[a-zA-Z0-9+/]+={0,2}")
@@ -64,8 +66,8 @@ def definitions(params):
 
 
 def calls(items):
-    if not isinstance(items, list) or len(items) > 16:
-        raise fail("invalid_tool_calls", "Expected up to 16 function calls")
+    if not isinstance(items, list):
+        raise fail("invalid_tool_calls", "Expected an array of function calls")
     output = []
     seen = set()
     for item in items:
@@ -88,8 +90,8 @@ def calls(items):
 
 def history(params):
     rounds = params.get("tool_history", [])
-    if not isinstance(rounds, list) or len(rounds) > 8:
-        raise fail("invalid_tool_history", "Expected up to eight function exchanges")
+    if not isinstance(rounds, list):
+        raise fail("invalid_tool_history", "Expected an array of function exchanges")
     for exchange in rounds:
         if not isinstance(exchange, dict):
             raise fail("invalid_tool_history", "Each function exchange must be an object")

@@ -183,6 +183,12 @@ class Transcripts:
                 revision INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
                 generation INTEGER
             );
+            CREATE TABLE IF NOT EXISTS agent_tool_results (
+                id INTEGER PRIMARY KEY, conversation TEXT NOT NULL REFERENCES conversations(id),
+                run TEXT NOT NULL, call_id TEXT NOT NULL, name TEXT NOT NULL,
+                arguments TEXT NOT NULL, output TEXT,
+                UNIQUE (conversation, run, call_id)
+            );
         """)
 
     def close(self):
@@ -366,6 +372,50 @@ class Transcripts:
                 "INSERT INTO task_receipts (conversation, task_id, attempt, digest) VALUES (?, ?, ?, ?)",
                 (identifier, task_id, attempt, digest),
             )
+
+    def record_tool_calls(self, identifier, run, calls):
+        references = {}
+        with self.db:
+            for item in calls:
+                cursor = self.db.execute(
+                    """INSERT INTO agent_tool_results (conversation, run, call_id, name, arguments)
+                       VALUES (?, ?, ?, ?, ?) ON CONFLICT (conversation, run, call_id) DO NOTHING""",
+                    (identifier, run, item["id"], item["name"], item["arguments"]),
+                )
+                if cursor.rowcount != 1:
+                    raise fail("duplicate_tool_call", "The provider reused a tool call ID")
+                references[item["id"]] = cursor.lastrowid
+        return references
+
+    def record_tool_result(self, reference, output):
+        with self.db:
+            self.db.execute(
+                "UPDATE agent_tool_results SET output=? WHERE id=?",
+                (output if isinstance(output, str) else json.dumps(output, ensure_ascii=False), reference),
+            )
+
+    def tool_result(self, identifier, reference, offset):
+        # Limit each page before it is placed in an IPC response or a model request.
+        page_size = 2048
+        if type(reference) is not int or not 1 <= reference < 2**63:
+            raise fail("invalid_result_id", "Expected a positive tool result ID")
+        if type(offset) is not int or not 0 <= offset < 2**63 - page_size:
+            raise fail("invalid_offset", "Expected a nonnegative character offset")
+        row = self.db.execute(
+            """SELECT name, substr(output, ?, ?) FROM agent_tool_results
+               WHERE conversation=? AND id=?""",
+            (offset + 1, page_size + 1, identifier, reference),
+        ).fetchone()
+        if row is None:
+            raise fail("unknown_result", "This agent has no result with that ID")
+        name, output = row
+        if output is None:
+            return {"id": reference, "tool": name, "status": "unconfirmed", "next_offset": None}
+        return {
+            "id": reference, "tool": name, "status": "recorded", "offset": offset,
+            "text": output[:page_size],
+            "next_offset": offset + page_size if len(output) > page_size else None,
+        }
 
     def tool_policy(self, identifier):
         row = self.db.execute(

@@ -531,7 +531,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         values = TASK | {"task": "A" + "\0" * 3999, "recovery_check": "A" + "\0" * 1199}
         task = self.rpc("submit", **values)
         lease = self.rpc("claim", agent="tide", lease_seconds=5)
-        for index in range(1, 65):
+        for index in range(1, 73):
             self.rpc(
                 "progress", id=task["id"], token=lease["token"], index=index,
                 name="x" * 96, phase="finished",
@@ -541,6 +541,8 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(reply["result_truncated"])
         self.assertLessEqual(encoded_size(reply), 60 * 1024)
         self.assertEqual(len(reply["progress"]), 64)
+        self.assertEqual(reply["progress"][0]["event_index"], 9)
+        self.assertEqual(reply["progress"][-1]["event_index"], 72)
         self.assertTrue(result.startswith(reply["result"]))
         self.assertEqual(self.rpc("get", id=task["id"]), reply)
         self.assertEqual(self.rpc("submit", **values), reply)

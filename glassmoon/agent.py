@@ -16,10 +16,10 @@ from .models import (
     encoded_size,
     message,
     modalities,
-    result_text,
     within_reply_limit,
 )
 from .service import fail, method, serve, service_args
+from .tool_context import ToolContext, excerpt
 from .toolbox import call_tool, tool, tool_catalog, validate_name
 from .workspace_tools import Workspace
 
@@ -55,13 +55,23 @@ METHODS = {
     "task_receipt": method(
         "Read an agent's durable task receipt", {"id": TEXT, "attempt": INTEGER}
     ),
+    "tool_result": method(
+        "Read a page of an archived tool result", {"id": INTEGER}, {"offset": INTEGER}
+    ),
 }
 
+LONG_RUNNING_METHODS = ("chat", "run_task")
 STATE = Path.home() / ".local" / "state" / "glassmoon"
 TRANSCRIPT_BUDGET = 60 * 1024
 TOOL_BUDGET = 57 * 1024
-MAX_TOOL_ROUNDS = 6
-MAX_TOOL_CALLS = 16
+RETRYABLE_GENERATION = {
+    "busy", "openai_connection", "provider_connection", "provider_unavailable", "timeout",
+}
+READ_TOOL_RESULT = "read_tool_result"
+RESULT_READER = tool(
+    "Read the original JSON text of an archived tool result. Start at offset=0 and follow next_offset.",
+    {"id": INTEGER, "offset": INTEGER},
+)
 SELF_TOOL_POLICY = "configure_shared_tool"
 SELF_TOOL = tool(
     "Inspect or change your shared tool policy for future turns. For mode=read, send empty service and expected_revision=0. "
@@ -83,13 +93,19 @@ def task_key(params):
     return identifier, attempt
 
 
-def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET, summary=""):
+def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET, summary="", checkpoint=""):
     developer = {
         "role": "developer",
         "content": [{"type": "text", "text": instructions}],
     }
     base = [developer, compaction.context_summary(summary)] if summary else [developer]
-    size = encoded_size([*base, user])
+    current = [user]
+    if checkpoint:
+        current.append({
+            "role": "user",
+            "content": "Progress on the current request from earlier tool exchanges:\n" + checkpoint,
+        })
+    size = encoded_size([*base, *current])
     if size > budget:
         raise fail(
             "message_too_large",
@@ -104,7 +120,7 @@ def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET, summary
             break
         size += turn_size
         start -= 2
-    return [*base, *history[start:], user]
+    return [*base, *history[start:], *current]
 
 
 class Agent:
@@ -243,15 +259,15 @@ class Agent:
                     *definitions,
                     *(tool | {"name": name} for name, tool in additions.items()),
                 ]
-                if len(updated) > functions.MAX_FUNCTIONS:
+                if len(updated) > functions.MAX_AGENT_FUNCTIONS:
                     status[service] = {
                         "state": "over_limit", "count": len(additions), "generation": generation,
-                        "available_slots": functions.MAX_FUNCTIONS - len(definitions),
+                        "available_slots": functions.MAX_AGENT_FUNCTIONS - len(definitions),
                     }
                     if stream:
                         await emit({
                             "type": "status",
-                            "message": f"Tool service {service} exceeds the {functions.MAX_FUNCTIONS}-tool limit for this turn.",
+                            "message": f"Tool service {service} exceeds the {functions.MAX_AGENT_FUNCTIONS}-tool limit for this turn.",
                         })
                     continue
                 definitions = functions.definitions({"tools": updated})
@@ -279,6 +295,14 @@ class Agent:
         return definitions, routes, images, status
 
     async def execute(self, item, routes):
+        if item["name"] == READ_TOOL_RESULT:
+            try:
+                params = json.loads(item["arguments"])
+                return {"value": self.read_tool_result(params)}
+            except RequestError as error:
+                return {"error": error.code, "message": str(error)}
+            except (ValueError, TypeError, KeyError, AttributeError):
+                return {"error": "invalid_arguments", "message": "Supply a tool result ID and offset"}
         if self.self_tools and item["name"] == SELF_TOOL_POLICY:
             return self.configure_shared_tool(item["arguments"])
         if item["name"] in routes:
@@ -323,44 +347,84 @@ class Agent:
         except (TypeError, ValueError):
             return {"error": "invalid_arguments", "message": "Tool arguments must be a JSON object"}
 
-    async def generate(self, history, user, emit, stream, summary="", *, requirements=None):
-        definitions, routes, images, _ = await self.discover_tools(emit, stream)
-        requirements = (self.requirements if requirements is None else requirements).copy()
-        if images:
-            requirements["tool_images"] = True
-        rounds = []
-        used_ids = set()
-        for _ in range(MAX_TOOL_ROUNDS + 1):
-            params = dict(requirements)
+    def read_tool_result(self, params):
+        return self.transcripts.tool_result(self.conversation, params["id"], params.get("offset", 0))
+
+    async def generation_params(self, requirements, definitions, context, history, user, summary):
+        def build(checkpoint):
+            params = requirements.copy()
             budget = TRANSCRIPT_BUDGET
             if definitions:
                 params["tools"] = definitions
-                if rounds:
-                    params["tool_history"] = rounds
+                if context.rounds:
+                    params["tool_history"] = [exchange for exchange, _ in context.rounds]
                 budget = TOOL_BUDGET - encoded_size(params)
+            params["messages"] = turn_messages(
+                self.instructions, history, user, budget, summary, checkpoint,
+            )
+            return params
+
+        async def summarize(messages):
+            return await call(
+                self.socket, self.router, "generate",
+                {
+                    **{
+                        key: requirements[key]
+                        for key in ("provider", "model", "provider_generation")
+                        if key in requirements
+                    },
+                    "messages": messages,
+                    "output_modalities": ["text"],
+                },
+            )
+
+        # Reuse the exact provider exchange if it fits. Preserve the newest full output
+        # before replacing it with a reference, and only compact exchanges if needed.
+        try:
+            return build(context.checkpoint)
+        except RequestError:
+            if not context.rounds:
+                raise
+        for rounds in (context.rounds[:-1], context.rounds[-1:]):
+            context.elide(rounds)
             try:
-                params["messages"] = turn_messages(
-                    self.instructions, history, user, budget, summary
-                )
-            except RequestError as error:
-                if error.code != "message_too_large" or not rounds:
-                    raise
-                return self.partial_reply(
-                    requirements, rounds, "The tool results exceeded the continuation budget."
-                )
+                return build(context.checkpoint)
+            except RequestError:
+                pass
+        while context.rounds:
+            await context.compact(user, summarize)
             try:
-                reply = await call(
-                    self.socket,
-                    self.router,
-                    "generate",
-                    params,
-                    on_chunk=emit if stream else None,
-                )
+                return build(context.checkpoint)
+            except RequestError:
+                pass
+        checkpoint = context.checkpoint
+        while checkpoint:
+            try:
+                return build(checkpoint)
+            except RequestError:
+                checkpoint = excerpt(checkpoint, len(checkpoint) // 2) if len(checkpoint) > 2 else ""
+        return build("")
+
+    async def generate(self, history, user, emit, stream, summary="", *, requirements=None):
+        definitions, routes, images, _ = await self.discover_tools(emit, stream)
+        if definitions:
+            definitions.append({"name": READ_TOOL_RESULT, **RESULT_READER})
+        requirements = (self.requirements if requirements is None else requirements).copy()
+        if images:
+            requirements["tool_images"] = True
+        context = ToolContext(self.transcripts, self.conversation)
+        while True:
+            prior_checkpoint = context.checkpoint
+            params = await self.generation_params(requirements, definitions, context, history, user, summary)
+            if stream and context.checkpoint != prior_checkpoint:
+                await emit({"type": "status", "message": "Compacted earlier tool exchanges. Continuing this run."})
+            try:
+                reply = await self.request_model(params, emit, stream)
             except (RequestError, ProtocolError, EOFError, OSError) as error:
-                if rounds:
+                if context.total:
                     reason = error.code if isinstance(error, RequestError) else "connection ended"
                     return self.partial_reply(
-                        requirements, rounds, f"The model could not continue after tool calls ({reason})."
+                        requirements, context, f"The model could not continue after tool calls ({reason})."
                     )
                 if isinstance(error, (ProtocolError, EOFError, OSError)):
                     raise fail("model_unavailable", "Connection to the model router ended") from None
@@ -370,25 +434,13 @@ class Agent:
                 return reply
             if not definitions:
                 raise fail("tools_disabled", "This agent has no workspace tools")
-            if (
-                len(rounds) >= MAX_TOOL_ROUNDS
-                or len(used_ids) + len(announced) > MAX_TOOL_CALLS
-            ):
-                return self.partial_reply(reply, rounds, "The turn reached its tool limit.")
-            ids = {item["id"] for item in announced}
-            if ids & used_ids:
-                raise fail("duplicate_tool_call", "The provider reused a tool call ID")
-            used_ids.update(ids)
             requirements.update(provider=reply["provider"], model=reply["model"])
             if "provider_generation" in reply:
                 requirements["provider_generation"] = reply["provider_generation"]
-            exchange = {
-                "calls": announced,
-                "outputs": {},
-                "text": result_text(reply["message"]["content"]),
-                "state": reply.get("tool_state", {}),
-            }
-            rounds.append(exchange)
+            try:
+                exchange, references = context.begin(announced, reply)
+            except RequestError:
+                return self.partial_reply(requirements, context, "The provider reused a tool call ID.")
             for item in announced:
                 if stream:
                     await emit(
@@ -402,12 +454,6 @@ class Agent:
                     and functions.image_part(value.get("image"))
                 ):
                     image = value["image"]
-                    for old in rounds:
-                        for key, prior in old["outputs"].items():
-                            if isinstance(prior, list):
-                                old["outputs"][key] = (
-                                    prior[0]["text"] + " (Earlier screenshot omitted.)"
-                                )
                     metadata = json.dumps(
                         {key: val for key, val in value.items() if key != "image"},
                         ensure_ascii=False,
@@ -415,7 +461,7 @@ class Agent:
                     output = [{"type": "text", "text": metadata}, image]
                 else:
                     output = json.dumps(result, ensure_ascii=False)
-                exchange["outputs"][item["id"]] = output
+                context.record(exchange, references, item, output)
                 if stream:
                     failed = (
                         "error" in result
@@ -432,16 +478,36 @@ class Agent:
                             "phase": "failed" if failed else "finished",
                         }
                     )
-        raise AssertionError("Tool loop exhausted")
+
+    async def request_model(self, params, emit, stream):
+        streamed = False
+
+        async def forward(chunk):
+            nonlocal streamed
+            streamed = True
+            await emit(chunk)
+
+        for delay in (1, 3, 8, None):
+            try:
+                return await call(
+                    self.socket, self.router, "generate", params,
+                    on_chunk=forward if stream else None,
+                )
+            except (RequestError, OSError, EOFError) as error:
+                if streamed or delay is None or (
+                    isinstance(error, RequestError) and error.code not in RETRYABLE_GENERATION
+                ):
+                    raise
+            if stream:
+                await emit({"type": "status", "message": f"Model connection interrupted. Retrying in {delay}s."})
+            await asyncio.sleep(delay)
 
     @staticmethod
-    def partial_reply(reply, rounds, reason):
-        names = ", ".join(
-            f"`{item['name']}`" for exchange in rounds for item in exchange["calls"]
-        )
-        explanation = reason + " The model did not finish its report."
-        if names:
-            explanation += f" Calls already attempted: {names}. Review their effects before continuing."
+    def partial_reply(reply, context, reason):
+        explanation = f"{reason} The model did not finish its report."
+        if context.total:
+            names = ", ".join(f"`{name}` (#{reference})" for name, reference in context.last_calls)
+            explanation += f" Attempted {context.total} tool calls. Last batch: {names}. Review their effects before continuing."
         return {
             **{
                 key: reply[key]
@@ -515,6 +581,8 @@ class Agent:
             if receipt["reply"] is None:
                 return {"status": "started"}
             return {"status": "done", "reply": receipt["reply"]}
+        if name == "tool_result":
+            return self.read_tool_result(params)
         if name == "tool_policy":
             return self.tool_policy()
         if name == "set_tool_policy":
@@ -561,7 +629,7 @@ class Agent:
                     "summary": summary,
                     "changed": through != snapshot[1],
                 }
-        if name not in ("chat", "run_task"):
+        if name not in LONG_RUNNING_METHODS:
             raise fail("unknown_method", "Unknown agent method")
         key = task_key(params) if name == "run_task" else None
         if key is not None:
@@ -675,6 +743,7 @@ async def run(args):
             staged=args.staged,
             reconnect=True,
             maintainer=args.maintainer,
+            long_running=LONG_RUNNING_METHODS,
         )
     finally:
         transcripts.close()

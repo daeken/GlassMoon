@@ -11,11 +11,12 @@ from unittest.mock import AsyncMock, patch
 
 from mcp import StdioServerParameters
 
-from glassmoon.agent import Agent
+from glassmoon import functions
+from glassmoon.agent import TOOL_BUDGET, Agent
 from glassmoon.compaction import compact, compactable_turn
 from glassmoon.ipc import RequestError
 from glassmoon.mcp_bridge import Bridge
-from glassmoon.models import Transcripts
+from glassmoon.models import Transcripts, encoded_size
 from glassmoon.toolbox import load
 from glassmoon.tui import Terminal
 
@@ -546,7 +547,7 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             })
             self.assertEqual(status["services"]["third"]["state"], "available")
 
-    async def test_tool_limit_commits_review_receipt_without_running_another_call(self):
+    async def test_duplicate_tool_call_commits_review_without_repeating_effect(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))
             self.addCleanup(store.close)
@@ -560,13 +561,13 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             tool = AsyncMock(return_value={"note": "Saved"})
             task = {"id": "d" * 32, "attempt": 1, "text": "Run the fixture"}
             with (
-                patch("glassmoon.agent.MAX_TOOL_ROUNDS", 1),
                 patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(14, catalog))),
                 patch("glassmoon.agent.call", AsyncMock(return_value=model_reply)),
                 patch("glassmoon.agent.call_tool", tool),
             ):
                 response = await agent.handle("run_task", task, ignore, False)
                 self.assertEqual(response["outcome"], "review")
+                self.assertIn("reused a tool call ID", response["message"]["content"])
                 self.assertIn("tools_fixture__note", response["message"]["content"])
                 self.assertEqual(await agent.handle("run_task", task, ignore, False), response)
                 receipt = await agent.handle("task_receipt", {"id": task["id"], "attempt": 1}, ignore, False)
@@ -599,17 +600,19 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await agent.handle("run_task", task, ignore, False), partial)
             effect.assert_awaited_once()
 
-    async def test_oversized_tool_result_saves_partial_report(self):
+    async def test_oversized_tool_result_is_archived_and_turn_continues(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))
             self.addCleanup(store.close)
             agent = Agent("", "moon", "models", {}, "", store, tool_services=["tools.fixture"])
             catalog = [{"name": "note", "description": "Save note", "parameters": {"type": "object"}}]
-            model = AsyncMock(return_value={
+            tool_reply = {
                 "provider": "test", "model": "test",
                 "message": {"role": "assistant", "content": ""},
                 "tool_calls": [{"id": "call", "name": "tools_fixture__note", "arguments": "{}"}],
-            })
+            }
+            final = {"message": {"role": "assistant", "content": "Finished"}}
+            model = AsyncMock(side_effect=[tool_reply, final])
             task = {"id": "f" * 32, "attempt": 1, "text": "Run the fixture"}
             with (
                 patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(14, catalog))),
@@ -617,7 +620,69 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 patch("glassmoon.agent.call_tool", AsyncMock(return_value={"note": "\0" * 12000})),
             ):
                 response = await agent.handle("run_task", task, ignore, False)
-            self.assertEqual(response["outcome"], "review")
-            self.assertIn("continuation budget", response["message"]["content"])
+            self.assertEqual(response["message"], final["message"])
             self.assertEqual(store.revision("moon"), 2)
-            model.assert_awaited_once()
+            stub = model.await_args.args[3]["tool_history"][0]["outputs"]["call"]
+            self.assertIn("Archived tool result #1", stub)
+            output = ""
+            offset = 0
+            while offset is not None:
+                page = await agent.handle("tool_result", {"id": 1, "offset": offset}, ignore, False)
+                output += page["text"]
+                offset = page["next_offset"]
+            self.assertEqual(json.loads(output), {"value": {"note": "\0" * 12000}})
+
+    async def test_long_tool_run_compacts_and_can_read_old_results(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder, "agent.db")
+            store = Transcripts(path)
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {}, "", store, tool_services=["tools.fixture"])
+            catalog = [{"name": "note", "description": "Save note", "parameters": {"type": "object"}}]
+            tool = AsyncMock(return_value={"note": "abcde" * 1200})
+            checkpoint_count = 0
+            step = 0
+
+            async def model(_socket, _service, _method, params, **_kwargs):
+                nonlocal step, checkpoint_count
+                self.assertLessEqual(encoded_size(params), TOOL_BUDGET)
+                if "tools" not in params:
+                    self.assertEqual(params["provider_generation"], 32)
+                    self.assertIn("completed_exchanges", params["messages"][-1]["content"])
+                    checkpoint_count += 1
+                    return {"message": {"role": "assistant", "content": "Checkpoint of executed notes"}}
+                rounds = functions.history(params)
+                if checkpoint_count:
+                    self.assertEqual(params["provider_generation"], 32)
+                    self.assertTrue(any("Checkpoint of executed notes" in str(item) for item in params["messages"]))
+                step += 1
+                if step == 42:
+                    self.assertIn("abcde", rounds[-1]["outputs"]["step-41"])
+                    return {"message": {"role": "assistant", "content": "Finished all notes"}}
+                name, arguments = ("read_tool_result", '{"id": 1, "offset": 0}') if step == 41 else (
+                    "tools_fixture__note", "{}",
+                )
+                calls = [{"id": f"step-{step}", "name": name, "arguments": arguments}]
+                if step == 1:
+                    calls.extend(dict(calls[0], id=f"extra-{i}") for i in range(19))
+                return {
+                    "provider": "test", "model": "test", "provider_generation": 32,
+                    "message": {"role": "assistant", "content": ""},
+                    "tool_calls": calls,
+                    "tool_state": {"reasoning": "a" * 5500},
+                }
+
+            with (
+                patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(14, catalog))),
+                patch("glassmoon.agent.call", side_effect=model),
+                patch("glassmoon.agent.call_tool", tool),
+            ):
+                task = {"id": "f" * 32, "attempt": 1, "text": "Complete all notes"}
+                reply = await agent.handle("run_task", task, ignore, False)
+            self.assertEqual(reply["message"]["content"], "Finished all notes")
+            self.assertGreater(checkpoint_count, 1)
+            self.assertEqual(tool.await_count, 59)
+            reopened = Transcripts(path)
+            self.addCleanup(reopened.close)
+            self.assertIn("abcde", reopened.tool_result("moon", 1, 0)["text"])
+            self.assertEqual(reopened.task_receipt("moon", task["id"], 1)["reply"], reply)

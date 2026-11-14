@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
-from glassmoon.agent import Agent
+from glassmoon.agent import LONG_RUNNING_METHODS, Agent
 from glassmoon.echo import METHODS
 from glassmoon.ipc import (
     ProtocolError,
@@ -31,6 +31,36 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class UpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_long_running_agent_rpc_outlasts_default_service_deadline(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(5):
+            socket = await self.start_broker(stack, 1000)
+            ready = asyncio.Event()
+            finished = asyncio.Event()
+
+            async def handle(*_):
+                await finished.wait()
+                return {"finished": True}
+
+            worker = asyncio.create_task(serve(
+                socket, "agent.fixture", None,
+                {name: method("Wait for release") for name in (*LONG_RUNNING_METHODS, "ordinary")},
+                handle, on_ready=ready.set, long_running=LONG_RUNNING_METHODS,
+            ))
+
+            async def stop():
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+            stack.push_async_callback(stop)
+            await ready.wait()
+            with patch("glassmoon.service.RPC_TIMEOUT", 0.05):
+                pending = [asyncio.create_task(call(socket, "agent.fixture", name, {})) for name in LONG_RUNNING_METHODS]
+                with self.assertRaises(RequestError) as expired:
+                    await call(socket, "agent.fixture", "ordinary", {})
+                self.assertEqual(expired.exception.code, "timeout")
+                finished.set()
+                self.assertEqual(await asyncio.gather(*pending), [{"finished": True}] * 2)
+
     async def test_wire_reports_malformed_json_as_protocol_error(self):
         for frame in (b"not json\n", b'"\xff"\n', b"[" * 1500 + b"\n"):
             reader = asyncio.StreamReader()

@@ -331,11 +331,11 @@ class Mailbox:
         events = db.execute(
             """
             SELECT event_index, name, phase, observed_at FROM task_progress
-             WHERE task_id=? AND attempt=? ORDER BY event_index
+             WHERE task_id=? AND attempt=? ORDER BY event_index DESC LIMIT 64
         """,
             (id, row["attempts"]),
         ).fetchall()
-        task["progress"] = [dict(event) for event in events]
+        task["progress"] = [dict(event) for event in reversed(events)]
         refs = db.execute(
             "SELECT owner, key, attempt FROM task_evidence WHERE task_id=? ORDER BY owner, key", (id,)
         ).fetchall()
@@ -358,7 +358,7 @@ class Mailbox:
         return task
 
     def progress(self, db, now, id, token, index, name, phase):
-        index = number(index, 1, 64, "event index")
+        index = number(index, 1, 2**63 - 1, "event index")
         name = label(name, "tool name")
         if phase not in ("started", "finished", "failed"):
             raise fail("invalid_phase", "Expected a tool lifecycle phase")
