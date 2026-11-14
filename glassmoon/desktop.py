@@ -7,7 +7,7 @@ from pathlib import Path
 from .ipc import ProtocolError, RequestError
 from .models import INTEGER, TEXT
 from .service import fail, serve, service_args
-from .toolbox import METHODS, ToolService, tool
+from .toolbox import METHODS, ToolService, call_tool, tool
 
 TOOLS = {
     "status": tool(
@@ -38,6 +38,10 @@ TOOLS = {
 TOOLS["screenshot"]["returns_image"] = True
 TOOLS["window_screenshot"]["returns_image"] = True
 CAPTURE_TOOLS = ("status", "screenshot", "windows", "window_screenshot")
+SHARE_WINDOW = tool(
+    "Explicitly share one selected app-window screenshot and an observation summary.",
+    {"window_id": INTEGER, "owner": TEXT, "key": TEXT, "summary": TEXT},
+)
 
 
 class Desktop:
@@ -99,6 +103,7 @@ def main():
         help="Expose real desktop mouse and keyboard actions",
     )
     parser.add_argument("--window-capture", action="store_true", help="Expose capture of the configured app's windows")
+    parser.add_argument("--evidence", help="Evidence service for explicit app-window screenshot sharing")
     parser.add_argument(
         "--target-pid",
         type=int,
@@ -111,6 +116,8 @@ def main():
         parser.error("--window-capture requires --target-pid")
     if args.window_capture and args.allow_input:
         parser.error("Use --window-capture for a read-only worker")
+    if args.evidence and not args.window_capture:
+        parser.error("--evidence requires --window-capture")
     try:
         bridge = Desktop(
             args.helper.resolve(strict=True), args.allow_input, args.target_pid, args.window_capture
@@ -121,7 +128,21 @@ def main():
             and (name not in ("windows", "window_screenshot") or args.window_capture)
             and (name != "screenshot" or not args.window_capture)
         }
-        service = ToolService(tools, bridge.invoke)
+        async def invoke(name, arguments):
+            if name != "share_window":
+                return await bridge.invoke(name, arguments)
+            shot = await bridge.invoke("window_screenshot", {"window_id": arguments["window_id"]})
+            payload = {field: arguments[field] for field in ("owner", "key", "summary")}
+            payload["image"] = shot["image"]
+            payload["metadata"] = {
+                "source": "macos_window", "target_pid": args.target_pid,
+                **{field: shot[field] for field in ("window_id", "width", "height")},
+            }
+            return await call_tool(args.socket, args.evidence, "publish_image", payload)
+
+        if args.evidence:
+            tools["share_window"] = SHARE_WINDOW
+        service = ToolService(tools, invoke)
         asyncio.run(
             serve(
                 args.socket,
