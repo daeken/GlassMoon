@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import signal
 
 from .ipc import ProtocolError, RequestError, call, connect
 from .mailbox import label
@@ -215,9 +216,20 @@ class Dispatch:
 async def run(args):
     fixed = {label(agent, "agent") for agent in args.agent}
     discovered = set()
+    stopping = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stopping.set)
+
+    async def poll_delay():
+        try:
+            async with asyncio.timeout(args.interval):
+                await stopping.wait()
+        except TimeoutError:
+            pass
 
     async def worker(dispatch):
-        while not args.discover or dispatch.identity in discovered:
+        while not stopping.is_set() and (not args.discover or dispatch.identity in discovered):
             try:
                 result = await dispatch.deliver(check_online=not args.discover)
             except (*CONNECTION_ERRORS, RequestError) as error:
@@ -237,7 +249,7 @@ async def run(args):
             if args.once:
                 return
             if result is None or result["status"] == "queued":
-                await asyncio.sleep(args.interval)
+                await poll_delay()
 
     def start(agent):
         return asyncio.create_task(worker(Dispatch(args.socket, args.mailbox, agent)))
@@ -248,7 +260,7 @@ async def run(args):
             tasks = {agent: start(agent) for agent in fixed}
             await asyncio.gather(*tasks.values())
             return
-        while True:
+        while not stopping.is_set():
             try:
                 discovered = await online_agents(args.socket)
             except (*CONNECTION_ERRORS, RequestError):
@@ -264,8 +276,11 @@ async def run(args):
             if args.once:
                 await asyncio.gather(*tasks.values())
                 return
-            await asyncio.sleep(args.interval)
+            await poll_delay()
+        await asyncio.gather(*tasks.values())
     finally:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.remove_signal_handler(sig)
         for task in tasks.values():
             task.cancel()
         await asyncio.gather(*tasks.values(), return_exceptions=True)

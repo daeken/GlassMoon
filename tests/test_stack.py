@@ -8,12 +8,46 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from glassmoon.agent import METHODS
 from glassmoon.ipc import call, connect
 from glassmoon.stack import manifest
 from glassmoon.toolbox import call_tool
 
 
 class StackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dispatcher_term_finishes_admitted_task_without_claiming_next(self):
+        with TemporaryDirectory(prefix="gm-dispatch-drain-", dir="/tmp") as root:
+            stack = await asyncio.create_subprocess_exec(sys.executable, "-m", "glassmoon.stack",
+                "examples/offline-stack.toml", "--state", Path(root) / "state", stdout=asyncio.subprocess.PIPE)
+            dispatcher = None
+            try:
+                async with asyncio.timeout(10):
+                    s = json.loads(await stack.stdout.readline())["socket"]
+                    async with connect(s) as worker:
+                        await worker.request("register", "register", name="agent.fixture", interface_version=1, methods=METHODS)
+                        await worker.request("promote", "promote", expected_active=None)
+                        body = {"sender": "test", "agent": "fixture", "task": "Local task"}
+                        first = await call_tool(s, "tools.mailbox", "submit", body | {"key": "first"})
+                        second = await call_tool(s, "tools.mailbox", "submit", body | {"key": "second"})
+                        dispatcher = await asyncio.create_subprocess_exec(sys.executable, "-m", "glassmoon.dispatcher",
+                            "--socket", s, "--agent", "fixture", "--interval", "0.1")
+                        work = await worker.receive()
+                        self.assertEqual(work["params"]["id"], first["id"])
+                        dispatcher.terminate()
+                        await asyncio.sleep(0.05)
+                        await worker.send("complete", call_id=work["call_id"], status="ok",
+                            result={"message": {"role": "assistant", "content": "Saved"}})
+                        self.assertEqual(await dispatcher.wait(), 0)
+                        for task, status in ((first, "done"), (second, "queued")):
+                            self.assertEqual((await call_tool(s, "tools.mailbox", "get", {"id": task["id"]}))["status"], status)
+            finally:
+                if dispatcher is not None and dispatcher.returncode is None:
+                    dispatcher.kill()
+                    await dispatcher.wait()
+                if stack.returncode is None:
+                    stack.terminate()
+                    await stack.wait()
+
     def test_manifest_rejects_invalid_command_and_environment_types_before_launch(self):
         with TemporaryDirectory() as folder:
             path = Path(folder, "stack.toml")

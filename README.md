@@ -268,6 +268,8 @@ uv run --locked python -m glassmoon.dispatcher --socket "$GLASSMOON_SOCKET" --ag
 
 Use `--discover` on a trusted stack to deliver work to agents as they register. Combine it with `--agent` to restrict discovery to named recipients. Tasks wait in the mailbox until their recipient is online.
 
+Sending SIGINT or SIGTERM to a standalone dispatcher stops further claims and lets admitted deliveries write their replies. A launcher that enforces a shutdown deadline can still interrupt a long delivery. Its lease will expire into review.
+
 `submit` takes a sender, recipient agent name, idempotency key, task text, and optional `recovery_check`. Repeating the same submission returns its existing task ID. Use `/queue AGENT TASK` to submit from the TUI, or `/queue-check AGENT CHECK | TASK` to attach a recovery check. Use `/tasks [AGENT]` and `/task ID` to see delivery state, recorded tool events, the recovery check, and the final reply or verified outcome. Tool events store names and phases.
 
 A dispatcher claims each task with a renewable lease. After losing a reply, the dispatcher checks the agent receipt before reporting an ambiguous delivery. An expired lease or ambiguous delivery moves the task to `review`. Use `/reconcile ID` in the TUI to recover a reply committed by the recipient when the delivery acknowledgment was lost. A saved partial reply is shown in the task while it stays in review. A receipt that only says execution started also leaves the task in review. After checking the work's effects, use `/resolve ID REVISION ACTION NOTE` in the TUI or the mailbox's `review` operation. Choose `verified` to record independently verified completion, `requeue` to retry, or `cancel` to close the task. The mailbox is shared among trusted broker clients.
