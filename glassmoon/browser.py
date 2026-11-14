@@ -13,7 +13,7 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 from .ipc import ProtocolError, RequestError
 from .models import ARRAY, INTEGER, TEXT, within_reply_limit
 from .service import fail, serve, service_args
-from .toolbox import METHODS, ToolService, tool
+from .toolbox import METHODS, ToolService, call_tool, tool
 
 VIEWPORT = {"width": 768, "height": 512}
 IMAGE_LIMIT = 21_000
@@ -69,6 +69,10 @@ TOOLS = {
 }
 
 TOOLS["screenshot"]["returns_image"] = True
+SHARE = tool(
+    "Explicitly publish this viewport screenshot and a short reproduction summary. Include no secrets. Returns a share key.",
+    WINDOW | {"owner": TEXT, "key": TEXT, "summary": TEXT},
+)
 
 
 def web_url(value):
@@ -133,10 +137,11 @@ class Window:
 
 
 class Browser:
-    def __init__(self, engine, browser, max_windows=8):
+    def __init__(self, engine, browser, max_windows=8, publish=None):
         self.engine = engine
         self.browser = browser
         self.max_windows = max_windows
+        self.publish = publish
         self.windows = {}
         self.opening = asyncio.Lock()
 
@@ -204,6 +209,31 @@ class Browser:
                         return {"closed": handle}
                     if action == "diagnostics":
                         return {"events": list(window.diagnostics)}
+                    if action == "share":
+                        if self.publish is None:
+                            raise fail(
+                                "sharing_unavailable",
+                                "No evidence service is configured",
+                            )
+                        shot = await self.page_action("screenshot", page, {})
+                        kinds = {}
+                        for event in window.diagnostics:
+                            kind = event["kind"]
+                            kinds[kind] = kinds.get(kind, 0) + 1
+                        return await self.publish(
+                            {
+                                "owner": args["owner"],
+                                "key": args["key"],
+                                "summary": args["summary"],
+                                "image": shot["image"],
+                                "metadata": {
+                                    "engine": self.engine,
+                                    "width": shot["width"],
+                                    "height": shot["height"],
+                                    "diagnostic_counts": kinds,
+                                },
+                            }
+                        )
                     if action == "actions":
                         steps = args["steps"]
                         if (
@@ -343,8 +373,20 @@ async def run(args):
             headless=not args.headed
         )
         try:
-            worker = Browser(args.engine, browser, args.max_windows)
-            service = ToolService(TOOLS, worker.invoke)
+
+            async def publish(payload):
+                return await call_tool(
+                    args.socket, args.evidence, "publish_image", payload
+                )
+
+            worker = Browser(
+                args.engine,
+                browser,
+                args.max_windows,
+                publish if args.evidence else None,
+            )
+            tools = TOOLS | {"share": SHARE} if args.evidence else TOOLS
+            service = ToolService(tools, worker.invoke)
             await serve(
                 args.socket,
                 args.name,
@@ -362,6 +404,10 @@ def main():
     parser.add_argument("--engine", choices=["chromium", "webkit"], default="chromium")
     parser.add_argument("--headed", action="store_true", help="Show browser windows")
     parser.add_argument("--max-windows", type=int, default=8)
+    parser.add_argument(
+        "--evidence",
+        help="Enable explicit screenshot publication to the named evidence service",
+    )
     args = parser.parse_args()
     if not 1 <= args.max_windows <= 32:
         parser.error("--max-windows must be between 1 and 32")

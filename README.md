@@ -148,6 +148,16 @@ Give an agent `--tool-service browser.chromium` or `--tool-service browser.webki
 
 Screenshots use viewport coordinates and arrive as image tool results. The router selects a model declaring `tool_images` and image input once a screenshot tool is available. The OpenAI example catalog includes this support. The runloop retains the latest screenshot within the IPC frame budget. Browser tools are also callable in Python with `glassmoon.toolbox.call_tool`. The TUI command `/tools` probes the agent's currently configured tool services.
 
+### Share a browser screenshot between agents
+
+Start a local visual evidence service with its own SQLite file. Pass `--evidence tools.evidence` when launching a browser worker, and add `--tool-service tools.evidence` to the receiving agent.
+
+```sh
+uv run --locked python -m glassmoon.evidence --socket "$GLASSMOON_SOCKET" --state /absolute/path/visual.sqlite3
+```
+
+The browser's `share` tool publishes a screenshot with an owner, key, and reproduction summary. It includes the viewport dimensions, engine, and counts of diagnostic categories. Share the owner and key in the mailbox task. The recipient can read the summary and explicitly request the image. The image call verifies the stored SHA-256 digest. Review what is visible before choosing to share, since the screenshot includes page content.
+
 ### Attach the macOS desktop
 
 On macOS 14 or newer, build the native helper and start the desktop service.
