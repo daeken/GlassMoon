@@ -97,6 +97,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         replacement = await worker.invoke("open", {})
         self.assertNotIn(handle, worker.windows)
         await worker.invoke("close", {"window": replacement["window"]})
+        fresh = Browser(engine, backend)
+        with self.assertRaises(RequestError) as stale:
+            await fresh.invoke("snapshot", {"window": replacement["window"]})
+        self.assertEqual(stale.exception.code, "stale_window")
+        opened = await fresh.invoke("open", {})
+        current = {"window": opened["window"]}
+        await fresh.invoke("snapshot", current)
+        await fresh.invoke("close", current)
 
     async def exercise_allowed_origins(self, engine, backend):
         unexpected = []

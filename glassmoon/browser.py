@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import re
 import secrets
 from collections import deque
 from dataclasses import dataclass, field
@@ -191,6 +192,7 @@ class Browser:
         self.allowed_origins = frozenset(origin(url, bare=True) for url in allowed_origins)
         self.idle_seconds = idle_seconds
         self.windows = {}
+        self.worker_id = secrets.token_hex(8)
         self.opening = asyncio.Lock()
 
     def navigation_url(self, url):
@@ -273,7 +275,7 @@ class Browser:
             except BaseException:
                 await self.close_context(context)
                 raise
-            handle = secrets.token_urlsafe(18)
+            handle = f"{self.worker_id}.{secrets.token_urlsafe(18)}"
             self.windows[handle] = window
             context.on("close", lambda _: self.windows.pop(handle, None))
             return {
@@ -289,6 +291,11 @@ class Browser:
                 if action == "open":
                     return await self.open(args)
                 handle = args["window"]
+                if not isinstance(handle, str):
+                    raise fail("unknown_window", "The browser window handle is unknown or closed")
+                owner = re.fullmatch(r"([0-9a-f]{16})\.[A-Za-z0-9_-]{24}", handle)
+                if owner and owner[1] != self.worker_id:
+                    raise fail("stale_window", "This window belongs to another browser worker. Open a fresh window.")
                 if handle not in self.windows:
                     raise fail(
                         "unknown_window",
