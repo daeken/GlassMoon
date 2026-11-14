@@ -65,6 +65,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         )
         model_parts = openai_tool_output([{"type": "text", "text": "768x512"}, image])
         self.assertEqual(model_parts[1]["image_url"], image["url"])
+        await worker.invoke(
+            "evaluate", a | {"script": "() => console.warn('fixture warning')"}
+        )
+        self.assertEqual(
+            (await worker.invoke("diagnostics", a))["events"][-1]["text"],
+            "fixture warning",
+        )
+        self.assertEqual((await worker.invoke("diagnostics", b))["events"], [])
         result = await worker.invoke(
             "actions",
             a

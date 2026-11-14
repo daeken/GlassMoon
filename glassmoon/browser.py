@@ -3,6 +3,8 @@
 import asyncio
 import base64
 import secrets
+from collections import deque
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error, async_playwright
@@ -30,6 +32,10 @@ TOOLS = {
         WINDOW | {"url": TEXT},
     ),
     "inspect": tool("Read the page title, URL, and visible text.", WINDOW),
+    "diagnostics": tool(
+        "Read recent page errors, console warnings, and failed requests for this window.",
+        WINDOW,
+    ),
     "evaluate": tool(
         "Run JavaScript in the page. Use a function expression to receive the optional JSON argument.",
         WINDOW | {"script": TEXT},
@@ -91,6 +97,41 @@ def image_result(data, width, height, **meta):
     }
 
 
+def request_path(url):
+    parts = urlsplit(url)
+    if parts.scheme in ("http", "https"):
+        return f"{parts.scheme}://{parts.hostname}{parts.path}"[:400]
+    return parts.scheme
+
+
+@dataclass
+class Window:
+    context: object
+    page: object
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    diagnostics: deque = field(default_factory=lambda: deque(maxlen=24))
+
+    def listen(self):
+        def record(kind, text):
+            self.diagnostics.append({"kind": kind, "text": str(text)[:400]})
+
+        def console(message):
+            if message.type in ("warning", "error"):
+                record(f"console_{message.type}", message.text)
+
+        def response(reply):
+            if reply.status >= 400:
+                record("http_error", f"{reply.status} {request_path(reply.url)}")
+
+        self.page.on("console", console)
+        self.page.on("pageerror", lambda error: record("page_error", error))
+        self.page.on(
+            "requestfailed",
+            lambda request: record("request_failed", request_path(request.url)),
+        )
+        self.page.on("response", response)
+
+
 class Browser:
     def __init__(self, engine, browser, max_windows=8):
         self.engine = engine
@@ -123,6 +164,8 @@ class Browser:
                     ),
                 )
                 page = await context.new_page()
+                window = Window(context, page)
+                window.listen()
                 page.on("popup", lambda popup: asyncio.create_task(popup.close()))
                 page.set_default_timeout(TIMEOUT)
                 if url:
@@ -131,7 +174,8 @@ class Browser:
                 await context.close()
                 raise
             handle = secrets.token_urlsafe(18)
-            self.windows[handle] = (context, page, asyncio.Lock())
+            self.windows[handle] = window
+            context.on("close", lambda _: self.windows.pop(handle, None))
             return {
                 "window": handle,
                 "engine": self.engine,
@@ -150,14 +194,16 @@ class Browser:
                         "unknown_window",
                         "The browser window handle is unknown or closed",
                     )
-                context, page, lock = self.windows[handle]
-                async with lock:
+                window = self.windows[handle]
+                page = window.page
+                async with window.lock:
                     if page.is_closed():
                         raise fail("unknown_window", "The browser window is closed")
                     if action == "close":
-                        await context.close()
-                        self.windows.pop(handle)
+                        await window.context.close()
                         return {"closed": handle}
+                    if action == "diagnostics":
+                        return {"events": list(window.diagnostics)}
                     if action == "actions":
                         steps = args["steps"]
                         if (

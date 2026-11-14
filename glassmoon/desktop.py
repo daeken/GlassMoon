@@ -57,6 +57,10 @@ class Desktop:
                             args | {"action": action, "target_pid": self.target_pid}
                         ).encode()
                     )
+            except TimeoutError:
+                raise fail(
+                    "desktop_timeout", "The macOS desktop helper did not respond"
+                ) from None
             finally:
                 if process.returncode is None:
                     try:

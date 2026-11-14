@@ -131,7 +131,7 @@ uv run --locked python -m glassmoon.browser --socket "$GLASSMOON_SOCKET" \
   --name browser.webkit --engine webkit
 ```
 
-Give an agent `--tool-service browser.chromium` or `--tool-service browser.webkit`. Open a window and keep the returned handle for navigation, inspection, JavaScript, screenshots, and input. `wait_for` checks an observable selector and optional text. `actions` runs an ordered sequence of clicks, typing, keypresses, and scrolls within one window. Browser contexts start fresh and have independent storage. A worker replacement closes its old contexts.
+Give an agent `--tool-service browser.chromium` or `--tool-service browser.webkit`. Open a window and keep the returned handle for navigation, inspection, JavaScript, screenshots, and input. `wait_for` checks an observable selector and optional text. `diagnostics` returns recent page errors, console warnings, and failed requests for the window. `actions` runs an ordered sequence of clicks, typing, keypresses, and scrolls within one window. Browser contexts start fresh and have independent storage. A worker replacement closes its old contexts.
 
 Screenshots use viewport coordinates and arrive as image tool results. The router selects a model declaring `tool_images` and image input once a screenshot tool is available. The OpenAI example catalog includes this support. The runloop retains the latest screenshot within the IPC frame budget. Browser tools are also callable in Python with `glassmoon.toolbox.call_tool`. The TUI command `/tools` probes the agent's currently configured tool services.
 
@@ -145,7 +145,7 @@ swiftc -parse-as-library native/desktop.swift -o target/glassmoon-desktop
 uv run --locked python -m glassmoon.desktop --socket "$GLASSMOON_SOCKET"
 ```
 
-The desktop service captures the main display, including other visible apps. The helper reports the macOS Screen Recording and Accessibility permissions. Start the service with `--allow-input` to publish native clicks, typing, keypresses, and scrolling. Add `--target-pid PID` to require that app to be frontmost and keep pointer actions within its visible windows. Coordinate actions use the latest main-display screenshot dimensions. Attach the service to an agent with `--tool-service desktop`.
+The desktop service captures the main display, including other visible apps. The helper reports the macOS Screen Recording and Accessibility permissions. Start the service with `--allow-input` to publish native clicks, typing, keypresses, and scrolling. Add `--target-pid PID` to require that app to be frontmost and keep pointer actions within its visible windows. Coordinate actions use the main-display screenshot dimensions. Text insertion uses the focused control’s Accessibility interface and requires that the control expose editable selected text. Attach the service to an agent with `--tool-service desktop`.
 
 ### Keep shared working notes
 
