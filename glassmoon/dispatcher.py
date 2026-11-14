@@ -64,9 +64,23 @@ class Dispatch:
         try:
             try:
                 async with asyncio.timeout(245):
-                    reply = await call(
-                        self.socket, self.agent, "chat", {"text": message}
-                    )
+                    try:
+                        reply = await call(
+                            self.socket,
+                            self.agent,
+                            "run_task",
+                            {
+                                "id": task["id"],
+                                "attempt": task["attempts"],
+                                "text": message,
+                            },
+                        )
+                    except RequestError as error:
+                        if error.code != "unknown_method":
+                            raise
+                        reply = await call(
+                            self.socket, self.agent, "chat", {"text": message}
+                        )
                 status = "done"
                 result = (
                     result_text(reply["message"]["content"]).strip()

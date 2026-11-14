@@ -1,7 +1,9 @@
 """Persistent chat agent, exposed as a GlassMoon service."""
 
 import asyncio
+import hashlib
 import json
+import re
 from pathlib import Path
 
 from . import compaction, functions
@@ -32,6 +34,13 @@ METHODS = {
         "Send text or a multimodal user message to the agent",
         optional={"text": TEXT, "message": MESSAGE},
     ),
+    "run_task": method(
+        "Run one mailbox attempt and store a receipt",
+        {"id": TEXT, "attempt": INTEGER, "text": TEXT},
+    ),
+    "task_receipt": method(
+        "Read an agent's durable task receipt", {"id": TEXT, "attempt": INTEGER}
+    ),
 }
 
 STATE = Path.home() / ".local" / "state" / "glassmoon"
@@ -39,6 +48,15 @@ TRANSCRIPT_BUDGET = 60 * 1024
 TOOL_BUDGET = 57 * 1024
 MAX_TOOL_ROUNDS = 6
 MAX_TOOL_CALLS = 16
+
+
+def task_key(params):
+    identifier, attempt = params["id"], params["attempt"]
+    if not isinstance(identifier, str) or not re.fullmatch("[a-f0-9]{32}", identifier):
+        raise fail("invalid_task", "Expected a mailbox task ID")
+    if type(attempt) is not int or not 1 <= attempt <= 2**63 - 1:
+        raise fail("invalid_task", "Expected a positive task attempt")
+    return identifier, attempt
 
 
 def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET, summary=""):
@@ -287,6 +305,15 @@ class Agent:
         )
 
     async def handle(self, name, params, emit, stream):
+        if name == "task_receipt":
+            receipt = self.transcripts.task_receipt(
+                self.conversation, *task_key(params)
+            )
+            if not receipt:
+                return {"status": "absent"}
+            if receipt["reply"] is None:
+                return {"status": "started"}
+            return {"status": "done", "reply": receipt["reply"]}
         if name == "tool_status":
             definitions, routes, images, status = await self.discover_tools(
                 emit, stream
@@ -322,8 +349,11 @@ class Agent:
                     "summary": summary,
                     "changed": through != snapshot[1],
                 }
-        if name != "chat":
+        if name not in ("chat", "run_task"):
             raise fail("unknown_method", "Unknown agent method")
+        key = task_key(params) if name == "run_task" else None
+        if key is not None:
+            params = {"text": params["text"]}
         if (
             set(params) == {"text"}
             and isinstance(params["text"], str)
@@ -338,6 +368,22 @@ class Agent:
             )
         within_reply_limit(user)
         with self.transcripts.agent_turn():
+            if key is not None:
+                digest = hashlib.sha256(params["text"].encode()).hexdigest()
+                previous = self.transcripts.task_receipt(self.conversation, *key)
+                if previous:
+                    if previous["digest"] != digest:
+                        raise fail(
+                            "task_conflict",
+                            "The task attempt was recorded with different input",
+                        )
+                    if previous["reply"] is None:
+                        raise fail(
+                            "task_uncertain",
+                            "The task attempt started without a saved result",
+                        )
+                    return previous["reply"]
+                self.transcripts.begin_task(self.conversation, *key, digest)
             snapshot = self.transcripts.context(self.conversation)
             revision, _, summary, history = snapshot
             try:
@@ -355,7 +401,13 @@ class Agent:
             result = within_reply_limit(
                 {"agent": self.identity, "revision": revision + 2, **reply}
             )
-            self.transcripts.append(self.conversation, revision, user, assistant)
+            self.transcripts.append(
+                self.conversation,
+                revision,
+                user,
+                assistant,
+                receipt=(*key, result) if key is not None else None,
+            )
             return result
 
 

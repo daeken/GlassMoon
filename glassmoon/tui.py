@@ -183,9 +183,14 @@ class Terminal:
         if not response["tasks"]:
             self.log("status", "No tasks.")
         for row in response["tasks"]:
+            state = (
+                "review · outcome unknown"
+                if row["status"] == "review"
+                else row["status"]
+            )
             self.log(
                 "status",
-                f"{row['id']}  {row['status']}  {row['sender']} → {row['agent']}  {row['key']}",
+                f"{row['id']}  {state}  {row['sender']} → {row['agent']}  {row['key']}  attempts {row['attempts']}",
             )
 
     async def show_task(self, identifier):
@@ -197,6 +202,15 @@ class Terminal:
         for field in ("result", "review_note"):
             if task[field]:
                 self.log("status", task[field])
+        if task["status"] == "review":
+            self.log(
+                "status",
+                "Outcome unknown. Check the saved receipt with /reconcile ID or verify effects before retrying.",
+            )
+
+    async def reconcile_task(self, identifier):
+        await call_tool(self.socket, self.mailbox, "reconcile", {"id": identifier})
+        await self.show_task(identifier)
 
     def start(self, operation, window="status"):
         async def run():
@@ -243,7 +257,7 @@ class Terminal:
                         self.active,
                         "F2 switches windows. Page Up and Page Down scroll. // sends a slash.",
                     )
-                    self.log(self.active, "/tasks [AGENT]  /task ID")
+                    self.log(self.active, "/tasks [AGENT]  /task ID  /reconcile ID")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -258,6 +272,9 @@ class Terminal:
                 case "/task" if argument:
                     self.select("status")
                     self.start(lambda: self.show_task(argument))
+                case "/reconcile" if argument:
+                    self.select("status")
+                    self.start(lambda: self.reconcile_task(argument))
                 case "/services":
                     self.select("status")
                     self.start(self.list_services)

@@ -168,7 +168,7 @@ uv run --locked python -m glassmoon.dispatcher --socket "$GLASSMOON_SOCKET" --ag
 
 `submit` takes a sender, recipient agent name, idempotency key, and task text. The same sender, key, and task return the existing task ID. Use `/tasks [AGENT]` and `/task ID` in the TUI to see delivery state and the recorded reply. A `done` task has a saved reply from the recipient. The reply describes the agent's outcome and any blockers.
 
-A dispatcher claims each task with a renewable lease. An expired lease or ambiguous delivery moves the task to `review`. Check the work's effects before calling the mailbox's `review` operation with the current task revision, a note, and `requeue` or `cancel`. The mailbox is shared among trusted broker clients.
+A dispatcher claims each task with a renewable lease. An expired lease or ambiguous delivery moves the task to `review`. Use `/reconcile ID` in the TUI to recover a result committed by the recipient when the delivery acknowledgment was lost. A receipt that only says execution started leaves the task in review. Check the work's effects before calling the mailbox's `review` operation with the current task revision, a note, and `requeue` or `cancel`. The mailbox is shared among trusted broker clients.
 
 ### Probe a candidate before switching traffic
 

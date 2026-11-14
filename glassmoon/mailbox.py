@@ -9,8 +9,8 @@ import uuid
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from .ipc import ProtocolError, RequestError
-from .models import INTEGER, TEXT
+from .ipc import ProtocolError, RequestError, call
+from .models import INTEGER, TEXT, result_text
 from .service import fail, serve, service_args
 from .toolbox import METHODS, ToolService, tool
 
@@ -27,6 +27,9 @@ TOOLS = {
     "review": tool(
         "Resolve a task that may have been interrupted. Choose requeue or cancel after checking its effects.",
         {"id": TEXT, "action": TEXT, "note": TEXT, "expected_revision": INTEGER},
+    ),
+    "reconcile": tool(
+        "Recover a completed agent receipt for a task awaiting review", {"id": TEXT}
     ),
 }
 # Dispatcher operations stay available over IPC without being advertised to models.
@@ -268,13 +271,72 @@ class Mailbox:
             )
         return self.get(db, now, id)
 
+    def record_receipt(self, db, now, id, expected_revision, attempt, result):
+        result = content(result, "result", 12000)
+        changed = db.execute(
+            """
+            UPDATE tasks SET status='done', result=?, revision=revision+1,
+                             review_note='Recovered from the saved agent receipt.', updated_at=?
+            WHERE id=? AND status='review' AND revision=? AND attempts=?
+        """,
+            (result, now, id, expected_revision, attempt),
+        ).rowcount
+        if not changed:
+            raise fail(
+                "revision_conflict", "Task state changed while checking its receipt"
+            )
+        return self.get(db, now, id)
+
+    def settle_receipt(self, identifier, revision, attempt, result):
+        with self.transaction() as (db, now):
+            return self.record_receipt(db, now, identifier, revision, attempt, result)
+
 
 class MailboxService(ToolService):
-    def __init__(self, mailbox):
+    def __init__(self, mailbox, socket):
         async def invoke(name, arguments):
+            if name == "reconcile":
+                return await self.reconcile(arguments["id"])
             return await asyncio.to_thread(mailbox.request, name, arguments)
 
         super().__init__(TOOLS, invoke)
+        self.socket = socket
+        self.mailbox = mailbox
+
+    async def reconcile(self, identifier):
+        task = await self.invoke("get", {"id": identifier})
+        if task["status"] == "done":
+            return task
+        if task["status"] != "review":
+            raise fail("not_in_review", "Only a task awaiting review can be reconciled")
+        try:
+            async with asyncio.timeout(5):
+                receipt = await call(
+                    self.socket,
+                    f"agent.{task['agent']}",
+                    "task_receipt",
+                    {"id": identifier, "attempt": task["attempts"]},
+                )
+        except (RequestError, ProtocolError, EOFError, OSError, TimeoutError):
+            raise fail(
+                "receipt_unavailable", "Could not check the recipient's receipt"
+            ) from None
+        if receipt["status"] != "done":
+            raise fail(
+                "receipt_incomplete",
+                "No completed receipt for this attempt. Verify its effects.",
+            )
+        result = (
+            result_text(receipt["reply"]["message"]["content"]).strip()
+            or "Agent returned an empty reply."
+        )
+        return await asyncio.to_thread(
+            self.mailbox.settle_receipt,
+            identifier,
+            task["revision"],
+            task["attempts"],
+            result.encode()[:12000].decode(errors="ignore"),
+        )
 
     async def handle(self, name, params, emit, stream):
         if name == "invoke" and params.get("name") in DISPATCH:
@@ -289,7 +351,7 @@ def main():
     )
     args = parser.parse_args()
     try:
-        worker = MailboxService(Mailbox(args.state))
+        worker = MailboxService(Mailbox(args.state), args.socket)
         asyncio.run(serve(args.socket, args.name, args.replace, METHODS, worker.handle))
     except KeyboardInterrupt:
         return 130

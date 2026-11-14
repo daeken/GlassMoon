@@ -53,8 +53,17 @@ def main():
     args = parser.parse_args()
     if args.staged and args.replace is not None:
         parser.error("--staged and --replace cannot be used together")
+
+    async def handler(name, params, emit, stream):
+        result = await handle(name, params, emit, stream)
+        if name == "health":
+            result["service"] = args.name
+        return result
+
     asyncio.run(
-        serve(args.socket, args.name, args.replace, METHODS, handle, staged=args.staged)
+        serve(
+            args.socket, args.name, args.replace, METHODS, handler, staged=args.staged
+        )
     )
 
 

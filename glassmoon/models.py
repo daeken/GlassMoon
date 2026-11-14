@@ -161,6 +161,12 @@ class Transcripts:
                 position INTEGER NOT NULL, value TEXT NOT NULL,
                 PRIMARY KEY (conversation, position)
             );
+            CREATE TABLE IF NOT EXISTS task_receipts (
+                conversation TEXT NOT NULL REFERENCES conversations(id),
+                task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+                digest TEXT NOT NULL, reply TEXT,
+                PRIMARY KEY (conversation, task_id, attempt)
+            );
         """)
 
     def close(self):
@@ -256,7 +262,27 @@ class Transcripts:
             "before": end - len(page) or None,
         }
 
-    def append(self, identifier, revision, *messages):
+    def task_receipt(self, identifier, task_id, attempt):
+        row = self.db.execute(
+            "SELECT digest, reply FROM task_receipts WHERE conversation=? AND task_id=? AND attempt=?",
+            (identifier, task_id, attempt),
+        ).fetchone()
+        if row is None:
+            return None
+        digest, reply = row
+        return {
+            "digest": digest,
+            "reply": json.loads(reply) if reply is not None else None,
+        }
+
+    def begin_task(self, identifier, task_id, attempt, digest):
+        with self.db:
+            self.db.execute(
+                "INSERT INTO task_receipts (conversation, task_id, attempt, digest) VALUES (?, ?, ?, ?)",
+                (identifier, task_id, attempt, digest),
+            )
+
+    def append(self, identifier, revision, *messages, receipt=None):
         with self.db:
             if not self.db.execute(
                 "UPDATE conversations SET revision = revision + ? WHERE id = ? AND revision = ?",
@@ -277,4 +303,20 @@ class Transcripts:
                     for index, item in enumerate(messages, revision)
                 ],
             )
+            if receipt is not None:
+                task_id, attempt, reply = receipt
+                changed = self.db.execute(
+                    """UPDATE task_receipts SET reply=?
+                       WHERE conversation=? AND task_id=? AND attempt=? AND reply IS NULL""",
+                    (
+                        json.dumps(reply, ensure_ascii=False, allow_nan=False),
+                        identifier,
+                        task_id,
+                        attempt,
+                    ),
+                ).rowcount
+                if not changed:
+                    raise fail(
+                        "receipt_changed", "The task receipt changed while running"
+                    )
         return revision + len(messages)

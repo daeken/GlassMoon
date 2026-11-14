@@ -6,9 +6,11 @@ from pathlib import Path
 from threading import Barrier
 from unittest.mock import AsyncMock, patch
 
+from glassmoon.agent import Agent
 from glassmoon.dispatcher import Dispatch
 from glassmoon.ipc import RequestError
-from glassmoon.mailbox import Mailbox
+from glassmoon.mailbox import Mailbox, MailboxService
+from glassmoon.models import Transcripts
 
 TASK = {"sender": "moon", "agent": "tide", "key": "check", "task": "Check the fixture."}
 
@@ -124,3 +126,62 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.now += 31
         self.assertEqual(self.rpc("get", id=task["id"])["status"], "review")
         self.assertIsNone(self.rpc("claim", agent="tide", lease_seconds=10)["task"])
+
+    async def test_agent_receipt_survives_lost_ack_and_reconciles_mailbox(self):
+        task = self.rpc("submit", **TASK)
+        self.rpc("claim", agent="tide", lease_seconds=5)
+        params = {"id": task["id"], "attempt": 1, "text": "Verify the fixture."}
+
+        async def emit(_):
+            pass
+
+        database = self.path.with_name("agent.sqlite3")
+        store = Transcripts(database)
+        agent = Agent("", "tide", "", {}, "", store)
+        generation = AsyncMock(
+            return_value={"message": {"role": "assistant", "content": "Saved once"}}
+        )
+        with patch.object(agent, "generate", generation):
+            first = await agent.handle("run_task", params, emit, False)
+        store.close()
+
+        self.now += 6
+        self.assertEqual(self.rpc("get", id=task["id"])["status"], "review")
+        store = Transcripts(database)
+        self.addCleanup(store.close)
+        agent = Agent("", "tide", "", {}, "", store)
+        with patch.object(agent, "generate", generation):
+            self.assertEqual(await agent.handle("run_task", params, emit, False), first)
+        generation.assert_awaited_once()
+        self.assertEqual(store.history("tide")["revision"], 2)
+
+        async def lookup(_socket, _service, method, payload):
+            return await agent.handle(method, payload, emit, False)
+
+        worker = MailboxService(self.box, "socket")
+        with patch("glassmoon.mailbox.call", side_effect=lookup):
+            result = await worker.reconcile(task["id"])
+        self.assertEqual(
+            (result["status"], result["result"], result["attempts"]),
+            ("done", "Saved once", 1),
+        )
+
+    async def test_started_receipt_does_not_replay_an_interrupted_attempt(self):
+        task = self.rpc("submit", **TASK)
+        params = {"id": task["id"], "attempt": 1, "text": "Start the fixture."}
+        store = Transcripts(self.path.with_name("agent.sqlite3"))
+        self.addCleanup(store.close)
+        agent = Agent("", "tide", "", {}, "", store)
+
+        async def emit(_):
+            pass
+
+        with (
+            patch.object(agent, "generate", AsyncMock(side_effect=OSError)),
+            self.assertRaises(OSError),
+        ):
+            await agent.handle("run_task", params, emit, False)
+        with self.assertRaises(RequestError) as caught:
+            await agent.handle("run_task", params, emit, False)
+        self.assertEqual(caught.exception.code, "task_uncertain")
+        self.assertEqual(store.history("tide")["revision"], 0)
