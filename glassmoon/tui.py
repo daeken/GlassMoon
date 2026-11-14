@@ -154,19 +154,23 @@ class Terminal:
                 return
             generation = active["generation"]
             self.display_services([active])
+            failure = None
             try:
                 health = await call(
                     self.socket, service, "health", {}, generation=generation,
                     version=active["interface_version"],
                 )
             except RequestError as error:
-                if error.code != "generation_unavailable" or error.generation is not None:
+                if error.code not in {"generation_unavailable", "service_disconnected", "drain_timeout"}:
                     raise
+                failure = error
                 health = None
             current = await active_service(self.socket, service)
-        if health is None or current is None or current["generation"] != generation:
+        if current is None or current["generation"] != generation:
             self.log("status", f"{service} #{generation} changed during the probe. Run /health {service} again.")
             return
+        if failure is not None:
+            raise failure
         self.log("status", json.dumps(health, indent=2, ensure_ascii=False))
         identity = health.get("service") if isinstance(health, dict) else None
         if isinstance(identity, str) and identity != service:
