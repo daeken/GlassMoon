@@ -20,6 +20,7 @@ input { top: 20px; } button { top: 70px; }
 <input id="note" placeholder="Note" aria-label="Fixture note"><button onclick="document.querySelector('#status').textContent = document.querySelector('#note').value">Save</button>
 <p id="status" style="position:absolute;top:110px"></p>
 """
+SMOKE_PAGE = Path(__file__).resolve().parent.parent / "examples" / "browser-smoke.html"
 
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
@@ -92,7 +93,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 return "302 Found", b"Location: /status\r\n", b""
             if request == b"/status":
                 return "200 OK", b"", b"ready"
-            return "200 OK", b"Content-Type: text/html\r\n", PAGE.encode()
+            return "200 OK", b"Content-Type: text/html\r\n", SMOKE_PAGE.read_bytes()
 
         async def start(handler):
             return await asyncio.start_server(
@@ -106,7 +107,13 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             window = await worker.invoke("open", {"url": site})
             handle = {"window": window["window"]}
             try:
-                self.assertEqual((await worker.invoke("inspect", handle))["title"], "Fixture")
+                self.assertEqual((await worker.invoke("inspect", handle))["title"], "GlassMoon Workbench")
+                actions = await worker.invoke("actions", handle | {"steps": [
+                    {"action": "element", "operation": "fill", "by": "label", "name": "Note", "text": "Local smoke"},
+                    {"action": "element", "operation": "click", "by": "role", "role": "button", "name": "Save note"},
+                    {"action": "wait_for", "selector": "#status", "text": "Saved: Local smoke"},
+                ]})
+                self.assertEqual(actions["completed"], 3, actions)
                 status = await worker.invoke(
                     "evaluate", handle | {"script": "() => fetch('/status').then(r => r.text())"}
                 )

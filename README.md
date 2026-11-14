@@ -168,6 +168,8 @@ Supply `width` and `height` to `open` to test a specific viewport. Each dimensio
 
 For disposable browser workers, `--idle-seconds N` allows opening a new window to reclaim older idle windows. Windows with operations in progress remain available to those operations.
 
+To check browser integration locally, run `uv run --locked python -m unittest discover -s tests -p test_browser.py`. With the browser binaries installed, the test opens `examples/browser-smoke.html` over loopback, fills and submits the note form by its accessible labels, checks the visible result, and exercises the screenshot contract in each installed engine.
+
 ### Share a browser screenshot between agents
 
 Start a local visual evidence service with its own SQLite file. Pass `--evidence tools.evidence` when launching a browser worker, and add `--tool-service tools.evidence` to the receiving agent.
