@@ -84,13 +84,15 @@ class Dispatch:
             f"\nAfter an interruption, the operator can use this recovery check: {recovery}\n"
             if recovery else ""
         )
+        retry_note = task.get("review_note")
+        retry_context = f"\nOperator's requeue note for this work: {retry_note}\n" if retry_note else ""
         message = (
             f"GlassMoon task {task['id']} assigned by {task['sender']} (attempt {task['attempts']}).\n\n"
             f"{task['task']}\n\n"
             "Perform the requested work within your configured tools and report what you verified. "
             "If you cannot complete it, describe the blocker and any effects already observed. "
             "When delegating from this task through the mailbox, set parent to its task ID."
-            f"{recovery_context}"
+            f"{recovery_context}{retry_context}"
         )
         heartbeat = asyncio.create_task(self.heartbeat(lease))
         event_index = 0

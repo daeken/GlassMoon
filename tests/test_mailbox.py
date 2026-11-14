@@ -584,6 +584,30 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         again = self.rpc("claim", agent="tide", lease_seconds=5)
         self.assertEqual((again["task"]["id"], again["task"]["attempts"]), (task["id"], 2))
 
+    async def test_requeue_note_reaches_agent_after_pre_admission_deferral(self):
+        task = self.rpc("submit", **TASK)
+        self.rpc("claim", agent="tide", lease_seconds=1)
+        self.now += 2
+        review = self.rpc("get", id=task["id"])
+        note = "The note already exists. Check the receipt before doing anything else."
+        self.rpc("review", id=task["id"], action="requeue", note=note, expected_revision=review["revision"])
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+
+        async def route(method, fields):
+            return self.rpc(method, **fields)
+
+        busy = RequestError({"code": "agent_busy", "message": "Agent already in a turn"})
+        reply = {"message": {"content": "I confirmed the existing receipt"}}
+        with (
+            patch.object(dispatcher, "rpc", side_effect=route),
+            patch("glassmoon.dispatcher.call", AsyncMock(side_effect=[busy, reply])) as run_task,
+        ):
+            deferred = await dispatcher.deliver(check_online=False)
+            self.now = deferred["available_at"]
+            done = await dispatcher.deliver(check_online=False)
+        self.assertIn(note, run_task.await_args.args[3]["text"])
+        self.assertEqual((done["status"], done["review_note"]), ("done", None))
+
     def test_linked_evidence_is_idempotent_and_contains_no_image(self):
         task = self.rpc("submit", **TASK)
         fields = {"id": task["id"], "owner": "moon", "key": "screenshot"}

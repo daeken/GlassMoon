@@ -364,7 +364,7 @@ class Mailbox:
         db.execute(
             """
             UPDATE tasks SET status='running', attempts=attempts+1, token=?, lease_until=?,
-                             revision=revision+1, updated_at=?, review_note=NULL
+                             revision=revision+1, updated_at=?
             WHERE id=?
         """,
             (token, now + duration, now, row["id"]),
@@ -403,11 +403,12 @@ class Mailbox:
             """
             UPDATE tasks SET status=?, token=NULL, lease_until=NULL, result=?,
                              revision=revision+1, updated_at=?,
+                             review_note=CASE WHEN ?='queued' THEN review_note ELSE NULL END,
                              available_at=CASE WHEN ?='queued' THEN ? + (1 << MIN(attempts, 5)) ELSE 0 END
             WHERE id=? AND token=? AND status='running'
             RETURNING attempts
         """,
-            (status, result, now, status, now, id, token),
+            (status, result, now, status, status, now, id, token),
         ).fetchone()
         if task is None:
             raise fail("stale_lease", "Task is no longer owned by that lease")
