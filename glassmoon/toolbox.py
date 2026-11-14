@@ -95,7 +95,7 @@ def load(path, expected_sha256=None):
         exec(compile(data, str(source), "exec"), module.__dict__)  # noqa: S102
     declarations = getattr(module, "TOOLS", None)
     if not isinstance(declarations, dict):
-        raise ValueError("The Python tool module must export a TOOLS mapping")
+        raise TypeError("The Python tool module must export a TOOLS mapping")
     for name, declaration in declarations.items():
         validate_name(name)
         if (
