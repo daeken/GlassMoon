@@ -8,7 +8,7 @@ from time import monotonic
 
 from playwright.async_api import async_playwright
 
-from glassmoon.browser import Browser
+from glassmoon.browser import Browser, request_path
 from glassmoon.evidence import Evidence
 from glassmoon.ipc import RequestError
 from glassmoon.openai_service import openai_tool_output
@@ -26,6 +26,12 @@ SMOKE_PAGE = Path(__file__).resolve().parent.parent / "examples" / "browser-smok
 
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
+    def test_evidence_page_path_keeps_port_and_strips_query_fragment(self):
+        self.assertEqual(
+            request_path("http://[::1]:8769/browser-fixture.html?test=secret#tab"),
+            "http://[::1]:8769/browser-fixture.html",
+        )
+
     async def test_visual_window_contract(self):
         async with async_playwright() as playwright:
             installed = [

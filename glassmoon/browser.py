@@ -150,7 +150,11 @@ def image_result(data, width, height, **meta):
 def request_path(url):
     parts = urlsplit(url)
     if parts.scheme in ("http", "https"):
-        return f"{parts.scheme}://{parts.hostname}{parts.path}"[:400]
+        hostname = parts.hostname or ""
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
+        port = f":{parts.port}" if parts.port is not None else ""
+        return f"{parts.scheme}://{hostname}{port}{parts.path}"[:400]
     return parts.scheme
 
 
