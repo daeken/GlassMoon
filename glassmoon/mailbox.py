@@ -31,6 +31,10 @@ TOOLS = {
         optional={"agent": TEXT, "status": TEXT, "parent": TEXT, "before": INTEGER, "limit": INTEGER},
     ),
     "get": tool("Read a task and any recorded result.", {"id": TEXT}),
+    "handoff": tool(
+        "Summarize recently active or unresolved tasks for an operator taking over.",
+        optional={"limit": INTEGER},
+    ),
     "timeline": tool(
         "Read paginated task state changes and tool events, newest first.",
         {"id": TEXT}, {"before": INTEGER},
@@ -376,6 +380,23 @@ class Mailbox:
             "tasks": [dict(row) for row in rows[:limit]],
             "before": rows[limit - 1]["seq"] if len(rows) > limit else None,
         }
+
+    def handoff(self, db, now, limit=8):
+        limit = number(limit, 1, 10, "limit")
+        rows = db.execute(f"""
+            SELECT id, sender, agent, key, status, revision, attempts, lease_until, available_at,
+                   EXISTS(SELECT 1 FROM task_evidence WHERE task_id=tasks.id) AS has_evidence,
+                   recovery_check IS NOT NULL AS has_recovery_check,
+                   COALESCE((SELECT observed_at FROM task_events WHERE task_id=tasks.id
+                             ORDER BY seq DESC LIMIT 1), updated_at) AS last_activity,
+                   {COMPLETION_SQL}
+            FROM tasks WHERE status IN ('running','review','queued','done')
+            ORDER BY CASE status WHEN 'review' THEN 0 WHEN 'running' THEN 1
+                                WHEN 'queued' THEN 2 ELSE 3 END,
+                     last_activity DESC, seq DESC
+            LIMIT ?
+        """, (limit + 1,)).fetchall()
+        return {"observed_at": now, "tasks": [dict(row) for row in rows[:limit]], "more": len(rows) > limit}
 
     def claim(self, db, now, agent, lease_seconds):
         agent = label(agent, "agent")

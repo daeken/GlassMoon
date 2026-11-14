@@ -403,6 +403,29 @@ class Terminal:
     async def review_queue(self, parent):
         await self.list_tasks(parent=parent or None, status="review")
 
+    async def show_handoff(self):
+        report = await call_tool(self.socket, self.mailbox, "handoff", {})
+        async with connect(self.socket) as wire:
+            snapshot = (await wire.request("list", "list"))["result"]["services"]
+        online = {item["name"] for item in snapshot if item["state"] == "active"}
+        for task in report["tasks"]:
+            registered = "online" if f"agent.{task['agent']}" in online else "no active worker"
+            activity = datetime.fromtimestamp(task["last_activity"]).strftime("%b %d %H:%M:%S")
+            self.log("status", f"{task['agent']} ({registered})  {task_state(task)}  /task {task['id']}")
+            detail = f"  {task['key']} · attempt {task['attempts']} · last event {activity}"
+            if task["lease_until"] is not None:
+                until = datetime.fromtimestamp(task["lease_until"]).strftime("%H:%M:%S")
+                detail += f" · lease until {until}"
+            if task["has_recovery_check"]:
+                detail += " · recovery check saved"
+            if task["has_evidence"]:
+                detail += " · evidence linked"
+            self.log("status", detail)
+        if not report["tasks"]:
+            self.log("status", "No tasks to hand off.")
+        if report["more"]:
+            self.log("status", "Use /review or /tasks for more.")
+
     async def show_task(self, identifier):
         task = await call_tool(self.socket, self.mailbox, "get", {"id": identifier})
         self.log(
@@ -714,6 +737,7 @@ class Terminal:
                     self.log(self.active, "/link-evidence TASK OWNER KEY [ATTEMPT] links a shared observation")
                     self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
+                    self.log(self.active, "/handoff summarizes recent work and tasks that need attention")
                     self.log(self.active, "/more-tasks pages through your last task list")
                     self.log(self.active, "/maintain SERVICE[#GENERATION] TASK queues work for the maintainer")
                     self.log(self.active, "/maintainer SERVICE shows the active generation's maintainer")
@@ -755,6 +779,9 @@ class Terminal:
                 case "/review":
                     self.select("status")
                     self.start(lambda: self.review_queue(argument))
+                case "/handoff":
+                    self.select("status")
+                    self.start(self.show_handoff)
                 case "/more-tasks":
                     self.select("status")
                     self.start(self.more_tasks)

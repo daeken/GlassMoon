@@ -5,6 +5,7 @@
 - `/queue AGENT TASK` — queue a task for the named agent.
 - `/queue-check AGENT CHECK | TASK` — queue a task with a check to perform if its outcome becomes uncertain.
 - `/tasks` — list tasks and their current status.
+- `/handoff` — see work needing review, work in progress, queued tasks, and recent replies. Each entry shows the last recorded activity, the active recipient if registered, and whether there is a recovery check or linked evidence.
 - `/task ID` — inspect a task and any recorded result.
 - `/children ID` — find tasks delegated from this task.
 - `/review [PARENT]` — list tasks with uncertain outcomes. Supply a parent ID to see only its children.

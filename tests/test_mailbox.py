@@ -472,6 +472,21 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         listing = self.rpc("list_tasks", status="done")["tasks"]
         self.assertEqual({row["key"]: row["completion_source"] for row in listing}, expected)
 
+    def test_handoff_reports_expired_and_active_work_with_durable_activity(self):
+        interrupted = self.rpc("submit", **TASK, recovery_check="Read the fixture receipt")
+        self.rpc("claim", agent="tide", lease_seconds=1)
+        active = self.rpc("submit", **(TASK | {"agent": "moon", "key": "active"}))
+        claimed = self.rpc("claim", agent="moon", lease_seconds=20)
+        self.now += 3
+        self.rpc("progress", id=active["id"], token=claimed["token"], index=1, name="fixture", phase="started")
+        report = self.rpc("handoff", limit=2)
+        review, running = report["tasks"]
+        self.assertEqual((review["id"], review["status"], review["has_recovery_check"]), (interrupted["id"], "review", 1))
+        self.assertEqual((running["id"], running["status"], running["last_activity"]), (active["id"], "running", 103))
+        self.assertEqual(running["lease_until"], 120)
+        self.assertFalse(report["more"])
+        self.assertTrue(self.rpc("handoff", limit=1)["more"])
+
     def test_get_keeps_escape_heavy_results_within_a_reply(self):
         values = TASK | {"task": "A" + "\0" * 3999, "recovery_check": "A" + "\0" * 1199}
         task = self.rpc("submit", **values)
