@@ -93,20 +93,26 @@ def load(path, expected_sha256=None):
             raise fail("source_changed", "Python tool source did not match the reviewed SHA-256")
         # Execute the verified entry point without reading it a second time.
         exec(compile(data, str(source), "exec"), module.__dict__)  # noqa: S102
-    for name, declaration in module.TOOLS.items():
+    declarations = getattr(module, "TOOLS", None)
+    if not isinstance(declarations, dict):
+        raise ValueError("The Python tool module must export a TOOLS mapping")
+    for name, declaration in declarations.items():
         validate_name(name)
-        if not callable(declaration["handler"]) or not isinstance(
-            declaration["parameters"], dict
+        if (
+            not isinstance(declaration, dict)
+            or not callable(declaration.get("handler"))
+            or not isinstance(declaration.get("description"), str)
+            or not isinstance(declaration.get("parameters"), dict)
         ):
             raise TypeError(f"Invalid declaration for {name}")
 
     async def invoke(name, arguments):
-        handler = module.TOOLS[name]["handler"]
+        handler = declarations[name]["handler"]
         if inspect.iscoroutinefunction(handler):
             return await handler(**arguments)
         return await asyncio.to_thread(handler, **arguments)
 
-    return ToolService(module.TOOLS, invoke, source_sha256=expected_sha256)
+    return ToolService(declarations, invoke, source_sha256=expected_sha256)
 
 
 async def list_tools(socket, service):

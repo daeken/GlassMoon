@@ -308,6 +308,9 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RequestError) as changed:
                 load(plugin, source_hash)
             self.assertEqual(changed.exception.code, "source_changed")
+            plugin.write_text('TOOLS = {"bad": {"parameters":{}, "handler": lambda: None}}\n')
+            with self.assertRaisesRegex(TypeError, "Invalid declaration for bad"):
+                load(plugin, hashlib.sha256(plugin.read_bytes()).hexdigest())
             module = root / "mcp.py"
             module.write_text(MCP_SERVER)
             bridge = Bridge(
