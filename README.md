@@ -194,6 +194,10 @@ uv run --locked python -m glassmoon.supervisor --socket "$GLASSMOON_SOCKET" \
 
 Use a fresh service name or stop any existing worker before starting the supervisor. Recovery is bounded by the restart budget. The supervisor owns its child process group. A healthy probe after restart confirms the broker route is back. The maintainer receives the service name, probe failure, and restart status. Add `--mailbox tools.mailbox` to save that incident for dispatch even if the maintainer is offline.
 
+### Recover after a broker restart
+
+The agent, browser, mailbox, model providers and router, Python tool publisher, MCP bridge, and desktop service reconnect when their broker socket returns. A previously staged worker exits if it loses its connection. The TUI restores its lifecycle feed with a fresh snapshot. Existing browser windows and agent state remain available when their own workers survive. In-flight calls whose connection was lost may have run, so task receipts and review govern their recovery.
+
 ## Try the live service cutover
 
 You’ll need a Unix environment, a Rust toolchain with Cargo, and Python 3.11 or newer. Run these commands from the checkout.
@@ -251,7 +255,7 @@ Each message is a UTF-8 JSON object followed by a newline. JSON payloads are lim
 
 The broker forwards work as `type: "invoke"` with `call_id`, `method`, and `params`. The worker replies with `type: "complete"`, the same `call_id`, and an outcome in the same format as a response. For streamed calls, a worker can send `type: "chunk"` with its `call_id` and `data` before completion. The broker forwards these as `type: "chunk"` with the caller's `id`, the worker's `generation`, and `data`. When promoted, a new generation takes all subsequent calls. The old worker receives a `draining` message with `deadline_ms`, followed by `retire` when its calls finish or the deadline expires. At expiry the broker fails unresolved calls with `drain_timeout` and the worker is expected to stop. A worker disconnect fails its admitted calls, and a caller disconnect leaves admitted work with its worker.
 
-The prototype assumes trusted local processes with access to the socket. Generation IDs and routes live in broker memory. Services own any shared-state handoff, and the example workers are launched manually.
+The prototype assumes trusted local processes with access to the socket. Generation IDs and routes live in broker memory. Each broker process starts its generation sequence at a different random base. Services own any shared-state handoff, and the example workers are launched manually.
 
 ## Verify the cutover
 

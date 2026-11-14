@@ -62,20 +62,37 @@ class Terminal:
             )
 
     async def watch(self):
-        async with connect(self.socket) as wire:
-            snapshot = (await wire.request("watch", "watch"))["result"]
-            self.services = {item["generation"]: item for item in snapshot["services"]}
-            self.display_services()
-            while True:
-                event = await wire.receive()
-                item = event["service"]
-                generation = item["generation"]
-                action = event["event"]
-                if action == "retired":
-                    self.services.pop(generation, None)
-                else:
-                    self.services[generation] = item
-                self.log("status", f"{item['name']} #{generation} {action}")
+        delay = 0.2
+        waiting = False
+        while True:
+            try:
+                async with connect(self.socket) as wire:
+                    snapshot = (await wire.request("watch", "watch"))["result"]
+                    self.services = {
+                        item["generation"]: item for item in snapshot["services"]
+                    }
+                    if waiting:
+                        self.log("status", "Reconnected to the broker.")
+                    self.display_services()
+                    waiting = False
+                    delay = 0.2
+                    while True:
+                        event = await wire.receive()
+                        item = event["service"]
+                        generation = item["generation"]
+                        action = event["event"]
+                        if action == "retired":
+                            self.services.pop(generation, None)
+                        else:
+                            self.services[generation] = item
+                        self.log("status", f"{item['name']} #{generation} {action}")
+            except (EOFError, OSError, ProtocolError):
+                self.services.clear()
+                if not waiting:
+                    self.log("status", "Broker unavailable. Waiting to reconnect.")
+                    waiting = True
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 5)
 
     async def inspect(self, target):
         async with connect(self.socket) as wire:

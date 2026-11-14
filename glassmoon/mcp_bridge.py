@@ -95,7 +95,14 @@ async def run(args):
             return await bridge.invoke(client, name, arguments)
 
         service = ToolService(functions, invoke)
-        await serve(args.socket, args.name, args.replace, METHODS, service.handle)
+        await serve(
+            args.socket,
+            args.name,
+            args.replace,
+            METHODS,
+            service.handle,
+            reconnect=True,
+        )
 
 
 def main():

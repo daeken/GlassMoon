@@ -14,12 +14,18 @@ def print_json(value):
 
 async def run(args):
     if args.command == "call" and args.stream:
+
         async def chunk(data):
             print_json({"type": "chunk", "data": data})
 
         result = await call(
-            args.socket, args.service, args.method, args.params,
-            version=args.interface_version, on_chunk=chunk,
+            args.socket,
+            args.service,
+            args.method,
+            args.params,
+            version=args.interface_version,
+            on_chunk=chunk,
+            generation=args.generation,
         )
         print_json({"type": "response", "result": result})
         return
@@ -33,8 +39,15 @@ async def run(args):
                     method=args.method,
                     params=args.params,
                     interface_version=args.interface_version,
+                    **(
+                        {"generation": args.generation}
+                        if args.generation is not None
+                        else {}
+                    ),
                 )
-                print_json({"generation": reply["generation"], "result": reply["result"]})
+                print_json(
+                    {"generation": reply["generation"], "result": reply["result"]}
+                )
             case "describe":
                 print_json(
                     (await wire.request("describe", "cli", generation=args.generation))[
@@ -61,7 +74,12 @@ def main():
     call.add_argument("method")
     call.add_argument("params", nargs="?", type=json.loads, default={})
     call.add_argument("--interface-version", type=int, default=1)
-    call.add_argument("--stream", action="store_true", help="Print chunks as they arrive")
+    call.add_argument(
+        "--generation", type=int, help="Target an exact staged or active generation"
+    )
+    call.add_argument(
+        "--stream", action="store_true", help="Print chunks as they arrive"
+    )
     try:
         asyncio.run(run(parser.parse_args()))
         return 0

@@ -352,7 +352,16 @@ def main():
     args = parser.parse_args()
     try:
         worker = MailboxService(Mailbox(args.state), args.socket)
-        asyncio.run(serve(args.socket, args.name, args.replace, METHODS, worker.handle))
+        asyncio.run(
+            serve(
+                args.socket,
+                args.name,
+                args.replace,
+                METHODS,
+                worker.handle,
+                reconnect=True,
+            )
+        )
     except KeyboardInterrupt:
         return 130
     except (RequestError, ProtocolError, EOFError, OSError, sqlite3.Error) as error:

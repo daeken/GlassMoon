@@ -60,7 +60,7 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub fn new(drain_time: Duration) -> Self {
+    pub fn new(drain_time: Duration, first_generation: PeerId) -> Self {
         Self {
             peers: BTreeMap::new(),
             generations: BTreeMap::new(),
@@ -68,7 +68,7 @@ impl Broker {
             calls: HashMap::new(),
             slow_peers: BTreeSet::new(),
             drain_time,
-            next_peer: 1,
+            next_peer: first_generation,
             next_call: 1,
         }
     }

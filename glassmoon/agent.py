@@ -445,7 +445,12 @@ async def run(args):
             args.tool_service,
         )
         await serve(
-            args.socket, f"agent.{identity}", args.replace, METHODS, agent.handle
+            args.socket,
+            f"agent.{identity}",
+            args.replace,
+            METHODS,
+            agent.handle,
+            reconnect=True,
         )
     finally:
         transcripts.close()

@@ -316,6 +316,7 @@ async def run(args):
             {"models": CATALOG, "generate": GENERATE},
             adapter.handle,
             kind="model_provider",
+            reconnect=True,
         )
 
 

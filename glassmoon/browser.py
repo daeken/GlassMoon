@@ -345,7 +345,14 @@ async def run(args):
         try:
             worker = Browser(args.engine, browser, args.max_windows)
             service = ToolService(TOOLS, worker.invoke)
-            await serve(args.socket, args.name, args.replace, METHODS, service.handle)
+            await serve(
+                args.socket,
+                args.name,
+                args.replace,
+                METHODS,
+                service.handle,
+                reconnect=True,
+            )
         finally:
             await browser.close()
 

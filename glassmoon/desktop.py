@@ -105,7 +105,14 @@ def main():
         )
         service = ToolService(tools, bridge.invoke)
         asyncio.run(
-            serve(args.socket, args.name, args.replace, METHODS, service.handle)
+            serve(
+                args.socket,
+                args.name,
+                args.replace,
+                METHODS,
+                service.handle,
+                reconnect=True,
+            )
         )
     except KeyboardInterrupt:
         return 130

@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use protocol::{Incoming, MAX_FRAME};
 use std::error::Error;
 use std::fs::{self, Permissions};
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -44,7 +44,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = UnixListener::bind(&path)?;
     let _socket = SocketFile::new(path)?;
     let (events, mut incoming) = mpsc::channel(256);
-    let mut broker = Broker::new(Duration::from_millis(drain_ms));
+    // Keep generation IDs distinct across broker lifetimes, within JSON's exact integer range.
+    let mut seed = [0; 4];
+    fs::File::open("/dev/urandom")?.read_exact(&mut seed)?;
+    let first_generation = (u64::from(u32::from_ne_bytes(seed)) << 20) + 1;
+    let mut broker = Broker::new(Duration::from_millis(drain_ms), first_generation);
     loop {
         let deadline = broker.next_deadline();
         tokio::select! {

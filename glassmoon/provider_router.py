@@ -214,6 +214,7 @@ def main():
                 args.replace,
                 METHODS,
                 Router(args.socket).handle,
+                reconnect=True,
             )
         )
     except KeyboardInterrupt:

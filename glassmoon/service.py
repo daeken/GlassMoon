@@ -52,12 +52,16 @@ async def invoke(wire, message, handler):
     except Exception as error:  # noqa: BLE001 - isolate failures to the individual RPC.
         LOGGER.error("Unhandled service exception (%s)", type(error).__name__)
         code, detail = "service_error", "The service could not complete the request"
-    await wire.send(
-        "complete",
-        call_id=call_id,
-        status="error",
-        error={"code": code, "message": detail},
-    )
+    try:
+        await wire.send(
+            "complete",
+            call_id=call_id,
+            status="error",
+            error={"code": code, "message": detail},
+        )
+    except OSError:
+        # A disconnected broker will fail this invocation on the caller side.
+        return
 
 
 async def serve(
@@ -70,6 +74,44 @@ async def serve(
     kind=None,
     on_ready=None,
     staged=False,
+    reconnect=False,
+):
+    delay = 0.2
+    while True:
+        ready = False
+
+        def registered():
+            nonlocal ready
+            ready = True
+            if on_ready is not None:
+                on_ready()
+
+        try:
+            return await _serve_connection(
+                socket,
+                name,
+                replace,
+                methods,
+                handler,
+                kind=kind,
+                on_ready=registered,
+                staged=staged,
+            )
+        except (EOFError, OSError):
+            if not reconnect or staged or not (ready or replace is None):
+                raise
+            if ready:
+                LOGGER.warning(
+                    "%s lost its broker connection; waiting to register again", name
+                )
+                replace = None
+                delay = 0.2
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 5)
+
+
+async def _serve_connection(
+    socket, name, replace, methods, handler, *, kind, on_ready, staged
 ):
     async with connect(socket) as wire:
         registration = await wire.request(

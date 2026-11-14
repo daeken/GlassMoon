@@ -184,6 +184,54 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             await old.send("complete", call_id=received["call_id"], status="ok", result={"version": "v1"})
             self.assertEqual((await client.receive())["result"], {"version": "v1"})
 
+    async def test_opt_in_worker_reconnects_after_broker_restart(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(12):
+            directory = stack.enter_context(TemporaryDirectory(prefix="gm-reconnect-", dir="/tmp"))
+            socket = Path(directory, "ipc")
+
+            async def broker():
+                process = await asyncio.create_subprocess_exec(BROKER, socket)
+                stack.push_async_callback(self.stop_process, process)
+                while not socket.is_socket():
+                    self.assertIsNone(process.returncode)
+                    await asyncio.sleep(.01)
+                return process
+
+            first = await broker()
+            ready = asyncio.Event()
+            starts = 0
+
+            def on_ready():
+                nonlocal starts
+                starts += 1
+                ready.set()
+
+            async def handler(_name, _params, _emit, _stream):
+                return {"starts": starts}
+
+            worker = asyncio.create_task(serve(
+                socket, "echo", None, METHODS, handler, on_ready=on_ready, reconnect=True,
+            ))
+
+            async def stop_worker():
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+            stack.push_async_callback(stop_worker)
+            await ready.wait()
+            self.assertEqual(await call(socket, "echo", "echo", {}), {"starts": 1})
+            async with connect(socket) as wire:
+                generation = (await wire.request("list", "list"))["result"]["services"][0]["generation"]
+            ready.clear()
+            await self.stop_process(first)
+            await broker()
+            await ready.wait()
+            self.assertEqual(await call(socket, "echo", "echo", {}), {"starts": 2})
+            with self.assertRaises(RequestError) as stale:
+                await call(socket, "echo", "echo", {}, generation=generation)
+            self.assertEqual(stale.exception.code, "generation_unavailable")
+            self.assertFalse(worker.done())
+
 
 if __name__ == "__main__":
     unittest.main()

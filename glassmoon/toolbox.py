@@ -125,6 +125,7 @@ def main():
                 METHODS,
                 service.handle,
                 staged=args.staged,
+                reconnect=True,
             )
         )
     except KeyboardInterrupt:
