@@ -31,6 +31,51 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_model_preference_applies_after_current_turn_and_persists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder, "agent.db")
+            store = Transcripts(state)
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {"provider": "first", "min_context_tokens": 1234}, "", store)
+            entered = asyncio.Event()
+            resume = asyncio.Event()
+            seen = []
+
+            async def router(_socket, _name, _method, params, **_kwargs):
+                seen.append(params)
+                if len(seen) == 1:
+                    entered.set()
+                    await resume.wait()
+                return {"message": {"role": "assistant", "content": "ready"}}
+
+            async def change(target, **params):
+                return await target.handle("set_model_preference", params, ignore, False)
+
+            with patch("glassmoon.agent.call", side_effect=router):
+                turn = asyncio.create_task(agent.handle("chat", {"text": "first question"}, ignore, False))
+                try:
+                    await asyncio.wait_for(entered.wait(), 2)
+                    preference = await change(agent, mode="pin", provider="second", model="chosen", expected_revision=0)
+                    self.assertEqual(preference["revision"], 1)
+                    with self.assertRaises(RequestError) as stale:
+                        await change(agent, mode="auto", expected_revision=0)
+                    self.assertEqual(stale.exception.code, "model_preference_changed")
+                finally:
+                    resume.set()
+                    await turn
+                reopened = Transcripts(state)
+                self.addCleanup(reopened.close)
+                replacement = Agent("", "moon", "models", agent.requirements, "", reopened)
+                await replacement.handle("chat", {"text": "second question"}, ignore, False)
+                auto = await change(replacement, mode="auto", expected_revision=1)
+                self.assertNotIn("provider", auto["requirements"])
+                restored = await change(replacement, mode="default", expected_revision=2)
+                self.assertEqual(restored["requirements"]["provider"], "first")
+            self.assertEqual([params["provider"] for params in seen], ["first", "second"])
+            self.assertEqual(seen[-1]["model"], "chosen")
+            self.assertEqual(seen[-1]["min_context_tokens"], 1234)
+            self.assertIn("first question", json.dumps(seen[-1]["messages"]))
+
     async def test_tui_pages_older_history_without_duplicate_messages(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))

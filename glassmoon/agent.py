@@ -31,6 +31,12 @@ METHODS = {
         "Change shared tool membership for subsequent turns",
         {"service": TEXT, "mode": TEXT, "expected_revision": INTEGER},
     ),
+    "model_preference": method("Read this agent's model selection preference"),
+    "set_model_preference": method(
+        "Change model selection for subsequent turns",
+        {"mode": TEXT, "expected_revision": INTEGER},
+        {"provider": TEXT, "model": TEXT},
+    ),
     "compact": method("Summarize older complete turns into durable context"),
     "history": method(
         "Read a page of agent chat history", optional={"before": INTEGER}
@@ -109,6 +115,20 @@ class Agent:
         self.conversation = transcripts.create(identifier=identity)
         self.workspace = workspace
         self.tool_services = tuple(dict.fromkeys(tool_services))
+
+    def model_preference(self, saved=None):
+        if saved is None:
+            saved = self.transcripts.model_preference(self.conversation)
+        revision, mode, provider, model = saved
+        requirements = self.requirements.copy()
+        if mode != "default":
+            requirements.pop("provider", None)
+            requirements.pop("model", None)
+            if provider:
+                requirements["provider"] = provider
+            if model:
+                requirements["model"] = model
+        return {"revision": revision, "mode": mode, "requirements": requirements}
 
     def tool_policy(self, state=None):
         revision, overrides = (
@@ -220,9 +240,9 @@ class Agent:
             "message": "This agent has no tool by that name",
         }
 
-    async def generate(self, history, user, emit, stream, summary=""):
+    async def generate(self, history, user, emit, stream, summary="", *, requirements=None):
         definitions, routes, images, _ = await self.discover_tools(emit, stream)
-        requirements = self.requirements.copy()
+        requirements = (self.requirements if requirements is None else requirements).copy()
         if images:
             requirements["tool_images"] = True
         rounds = []
@@ -337,8 +357,9 @@ class Agent:
             "outcome": "review",
         }
 
-    async def compact(self, snapshot, force=False):
+    async def compact(self, snapshot, force=False, *, requirements=None):
         revision, through, summary, history = snapshot
+        requirements = self.requirements if requirements is None else requirements
 
         async def generate(messages):
             return await call(
@@ -347,9 +368,9 @@ class Agent:
                 "generate",
                 {
                     **{
-                        key: self.requirements[key]
+                        key: requirements[key]
                         for key in ("provider", "model")
-                        if key in self.requirements
+                        if key in requirements
                     },
                     "messages": messages,
                     "output_modalities": ["text"],
@@ -368,6 +389,24 @@ class Agent:
         )
 
     async def handle(self, name, params, emit, stream):
+        if name == "model_preference":
+            return self.model_preference()
+        if name == "set_model_preference":
+            mode, expected = params["mode"], params["expected_revision"]
+            provider, model = params.get("provider"), params.get("model")
+            if mode == "pin":
+                if not isinstance(provider, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", provider):
+                    raise fail("invalid_model_preference", "Pin a valid provider service name")
+                if model is not None and (
+                    not isinstance(model, str) or not model.strip() or len(model) > 160
+                ):
+                    raise fail("invalid_model_preference", "Supply a valid model ID")
+            elif mode not in ("auto", "default") or provider is not None or model is not None:
+                raise fail("invalid_model_preference", "Choose auto, default, or pin a provider and optional model")
+            if type(expected) is not int or not 0 <= expected < 2**63 - 1:
+                raise fail("invalid_revision", "Expected a valid model preference revision")
+            saved = self.transcripts.set_model_preference(self.conversation, expected, mode, provider, model)
+            return self.model_preference(saved)
         if name == "task_receipt":
             receipt = self.transcripts.task_receipt(
                 self.conversation, *task_key(params)
@@ -418,7 +457,7 @@ class Agent:
             return {
                 "agent": self.identity,
                 "service": self.router,
-                "requirements": self.requirements,
+                "requirements": self.model_preference()["requirements"],
                 "tools": self.workspace.names if self.workspace else [],
                 "tool_services": self.tool_policy()["enabled"],
                 "compacted_through": self.transcripts.context(self.conversation)[1],
@@ -428,7 +467,8 @@ class Agent:
         if name == "compact":
             with self.transcripts.agent_turn():
                 snapshot = self.transcripts.context(self.conversation)
-                through, summary, _ = await self.compact(snapshot, force=True)
+                requirements = self.model_preference()["requirements"]
+                through, summary, _ = await self.compact(snapshot, force=True, requirements=requirements)
                 return {
                     "through_revision": through,
                     "summary": summary,
@@ -470,9 +510,10 @@ class Agent:
                     return previous["reply"]
                 self.transcripts.begin_task(self.conversation, *key, digest)
             snapshot = self.transcripts.context(self.conversation)
+            requirements = self.model_preference()["requirements"]
             revision, _, summary, history = snapshot
             try:
-                _, summary, history = await self.compact(snapshot)
+                _, summary, history = await self.compact(snapshot, requirements=requirements)
             except (RequestError, ProtocolError, EOFError, OSError):
                 if stream:
                     await emit(
@@ -481,7 +522,7 @@ class Agent:
                             "message": "Compaction failed. Using the last saved context.",
                         }
                     )
-            reply = await self.generate(history, user, emit, stream, summary)
+            reply = await self.generate(history, user, emit, stream, summary, requirements=requirements)
             assistant = message(reply["message"])
             result = within_reply_limit(
                 {"agent": self.identity, "revision": revision + 2, **reply}

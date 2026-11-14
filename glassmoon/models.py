@@ -171,6 +171,10 @@ class Transcripts:
                 conversation TEXT PRIMARY KEY REFERENCES conversations(id),
                 revision INTEGER NOT NULL, overrides TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS model_preferences (
+                conversation TEXT PRIMARY KEY REFERENCES conversations(id),
+                revision INTEGER NOT NULL, mode TEXT NOT NULL, provider TEXT, model TEXT
+            );
         """)
 
     def close(self):
@@ -302,6 +306,30 @@ class Transcripts:
             (identifier,),
         ).fetchone()
         return (row[0], json.loads(row[1])) if row else (0, {})
+
+    def model_preference(self, identifier):
+        row = self.db.execute(
+            "SELECT revision, mode, provider, model FROM model_preferences WHERE conversation=?",
+            (identifier,),
+        ).fetchone()
+        return row if row else (0, "default", None, None)
+
+    def set_model_preference(self, identifier, expected, mode, provider, model):
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            revision, *values = self.model_preference(identifier)
+            if revision != expected:
+                raise fail("model_preference_changed", "Read the current preference before updating it")
+            if values == [mode, provider, model]:
+                return revision, mode, provider, model
+            saved = (revision + 1, mode, provider, model)
+            self.db.execute(
+                """INSERT INTO model_preferences VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(conversation) DO UPDATE SET revision=excluded.revision,
+                       mode=excluded.mode, provider=excluded.provider, model=excluded.model""",
+                (identifier, *saved),
+            )
+            return saved
 
     def set_tool_policy(self, identifier, expected, service, mode):
         with self.db:

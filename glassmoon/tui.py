@@ -256,6 +256,27 @@ class Terminal:
         membership = "enabled" if service in updated["enabled"] else "disabled"
         self.log(window, f"{service} {membership} for new turns. Use /tools to check availability.")
 
+    async def model_preference(self, window, argument):
+        agent = f"agent.{window}"
+        current = await call(self.socket, agent, "model_preference", {})
+        if argument:
+            if argument in ("auto", "default"):
+                fields = {"mode": argument}
+            else:
+                provider, sep, model = argument.partition("/")
+                fields = {"mode": "pin", "provider": provider}
+                if sep:
+                    fields["model"] = model
+            current = await call(
+                self.socket, agent, "set_model_preference",
+                fields | {"expected_revision": current["revision"]},
+            )
+        requirements = current["requirements"]
+        selection = requirements.get("provider", "any provider")
+        if "model" in requirements:
+            selection += "/" + requirements["model"]
+        self.log(window, f"Model preference {current['mode']} · {selection} · revision {current['revision']}")
+
     async def list_tasks(self, agent=None, parent=None, status=None, before=None):
         async with self.task_list_lock:
             await self.load_tasks(agent, parent, status, before)
@@ -476,6 +497,7 @@ class Terminal:
                     self.log(self.active, "/more-tasks pages through your last task list")
                     self.log(self.active, "/maintain SERVICE[#GENERATION] TASK queues work for the maintainer")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
+                    self.log(self.active, "/model [auto|default|PROVIDER[/MODEL]] in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                 case "/status":
                     self.select("status")
@@ -494,6 +516,9 @@ class Terminal:
                 case "/tool" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.change_tool(window, argument), window)
+                case "/model" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.model_preference(window, argument), window)
                 case "/tasks":
                     self.select("status")
                     self.start(lambda: self.list_tasks(argument.removeprefix("agent.")))
