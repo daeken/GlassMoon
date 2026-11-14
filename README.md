@@ -233,6 +233,8 @@ uv run --locked python -m glassmoon.supervisor --socket "$GLASSMOON_SOCKET" \
 
 Use a fresh service name or stop any existing worker before starting the supervisor. Recovery is bounded by the restart budget. The supervisor owns its child process group. A healthy probe after restart confirms the broker route is back. The maintainer receives the service name, probe failure, and restart status. Add `--mailbox tools.mailbox` to save that incident for dispatch even if the maintainer is offline.
 
+The supervisor waits through a broker outage while the worker is still running. When the broker is reachable again, the worker has the configured probe timeout to re-register before failed probes count toward a restart.
+
 ### Recover after a broker restart
 
 The agent, browser, mailbox, model providers and router, Python tool publisher, MCP bridge, and desktop service reconnect when their broker socket returns. Promoted staged workers join this recovery when reconnect is enabled and the broker has sent their activation notice. An unpromoted candidate needs a fresh probe after losing the broker. The TUI restores its lifecycle feed with a fresh snapshot. Existing browser windows and agent state remain available when their own workers survive. In-flight calls whose connection was lost may have run, so task receipts and review govern their recovery.

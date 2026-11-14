@@ -62,7 +62,8 @@ def main():
 
     asyncio.run(
         serve(
-            args.socket, args.name, args.replace, METHODS, handler, staged=args.staged
+            args.socket, args.name, args.replace, METHODS, handler,
+            staged=args.staged, reconnect=True,
         )
     )
 

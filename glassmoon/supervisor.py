@@ -16,7 +16,7 @@ async def probe(socket, service, method, params, expected, timeout=3):
     try:
         async with asyncio.timeout(timeout):
             reply = await call(socket, service, method, params)
-    except (RequestError, ProtocolError, EOFError, OSError, TimeoutError) as error:
+    except (RequestError, TimeoutError) as error:
         code = error.code if isinstance(error, RequestError) else type(error).__name__
         return f"{service}.{method} failed ({code})"
     if not isinstance(reply, dict) or any(
@@ -90,12 +90,18 @@ class Supervisor:
             start_new_session=True,
         )
         self.event("worker_started", pid=self.process.pid)
-        for _ in range(self.args.startup_probes):
+        remaining = self.args.startup_probes
+        while remaining:
             if self.process.returncode is not None:
                 return f"Worker exited with status {self.process.returncode}"
-            reason = await self.health()
+            try:
+                reason = await self.health()
+            except (ProtocolError, EOFError, OSError):
+                await asyncio.sleep(self.args.interval)
+                continue
             if reason is None:
                 return None
+            remaining -= 1
             await asyncio.sleep(self.args.interval)
         return reason
 
@@ -105,21 +111,45 @@ class Supervisor:
 
     async def monitor(self):
         failures = 0
+        disconnected = False
+        recovery_deadline = None
         while True:
             try:
                 await asyncio.wait_for(self.process.wait(), self.args.interval)
                 return f"Worker exited with status {self.process.returncode}"
             except TimeoutError:
                 pass
-            reason = await self.health()
+            try:
+                reason = await self.health()
+            except (ProtocolError, EOFError, OSError):
+                if not disconnected:
+                    self.event("broker_unreachable")
+                disconnected = True
+                failures = 0
+                continue
+            if disconnected:
+                self.event("broker_reconnected")
+                disconnected = False
+                recovery_deadline = asyncio.get_running_loop().time() + self.args.timeout
+            if reason is None:
+                recovery_deadline = None
+            elif recovery_deadline is not None:
+                if asyncio.get_running_loop().time() < recovery_deadline:
+                    continue
+                recovery_deadline = None
             failures = failures + 1 if reason else 0
             if failures >= self.args.failures:
                 return reason
 
     async def wait_for_route_removal(self):
-        async with asyncio.timeout(5), connect(self.args.socket) as wire:
+        async with asyncio.timeout(5):
             while True:
-                response = await wire.request("list", "list")
+                try:
+                    async with connect(self.args.socket) as wire:
+                        response = await wire.request("list", "list")
+                except (ProtocolError, EOFError, OSError):
+                    await asyncio.sleep(0.1)
+                    continue
                 if not any(
                     item["name"] == self.args.service and item["state"] == "active"
                     for item in response["result"]["services"]

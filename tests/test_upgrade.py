@@ -22,6 +22,54 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class UpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_supervisor_preserves_worker_through_broker_outage(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(15):
+            folder = Path(stack.enter_context(TemporaryDirectory(prefix="gm-supervise-", dir="/tmp")))
+            socket = folder / "ipc"
+
+            async def start_broker():
+                process = await asyncio.create_subprocess_exec(BROKER, socket)
+                stack.push_async_callback(self.stop_process, process)
+                while not socket.is_socket():
+                    self.assertIsNone(process.returncode)
+                    await asyncio.sleep(0.01)
+                return process
+
+            broker = await start_broker()
+            supervisor = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "glassmoon.supervisor", "--socket", socket,
+                "--service", "moon.text", "--expect", '{"status":"ok"}',
+                "--interval", "0.05", "--timeout", "1",
+                "--failures", "1", "--restarts", "0", "--",
+                sys.executable, "-m", "examples.moon_service", "--socket", socket,
+                stdout=asyncio.subprocess.PIPE,
+            )
+            stack.push_async_callback(self.stop_process, supervisor)
+
+            async def expect(event):
+                while line := await supervisor.stdout.readline():
+                    if f'"event": "{event}"'.encode() in line:
+                        return
+                    self.assertNotIn(b'"event": "unhealthy"', line)
+                self.fail(f"Missing supervisor event {event}")
+
+            await expect("healthy")
+            await self.stop_process(broker)
+            await expect("broker_unreachable")
+            await start_broker()
+            await expect("broker_reconnected")
+            for _ in range(20):
+                try:
+                    result = await call(socket, "moon.text", "health", {})
+                    self.assertEqual(result["status"], "ok")
+                    break
+                except RequestError:
+                    await asyncio.sleep(0.1)
+            else:
+                self.fail("Worker did not re-register")
+            self.assertIsNone(supervisor.returncode)
+
+
     async def start_broker(self, stack, drain_ms):
         directory = stack.enter_context(TemporaryDirectory(prefix="glassmoon-", dir="/tmp"))
         socket = Path(directory, "broker.sock")
