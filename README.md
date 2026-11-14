@@ -43,7 +43,7 @@ Type a message to chat. Use `/query NAME` to open another agent, F2 to cycle win
 
 Each agent saves its transcript in a local SQLite database keyed by name. `--state` sets the database path. The agent sends recent complete turns within the IPC frame budget and retains the full committed history on disk. `--provider` and `--model` set its default pin. Use `/model PROVIDER` or `/model PROVIDER/MODEL` in an agent's window to change selection for the next turn. `/model auto` selects by capabilities, and `/model default` restores the startup selection. `/model` shows the saved preference. The agent preserves its transcript across these changes. The next turn reports when a pinned model is unavailable. A selected provider can receive the conversation context, including when it summarizes earlier turns.
 
-Use `/older` in an agent's TUI window to page backward through its saved conversation. `/latest` returns to the live chat.
+Use `/older` in an agent's TUI window to page backward through its saved conversation. `/latest` returns to the live chat. `/memory` shows the saved summary and the most recent revision it covers.
 
 ### Use your ChatGPT plan
 

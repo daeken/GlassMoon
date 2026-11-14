@@ -39,6 +39,7 @@ METHODS = {
         {"provider": TEXT, "model": TEXT},
     ),
     "compact": method("Summarize older complete turns into durable context"),
+    "memory": method("Read the current saved conversation summary and revision"),
     "history": method(
         "Read a page of agent chat history", optional={"before": INTEGER}
     ),
@@ -494,8 +495,10 @@ class Agent:
                 "requirements": self.model_preference()["requirements"],
                 "tools": self.workspace.names if self.workspace else [],
                 "tool_services": self.tool_policy()["enabled"],
-                "compacted_through": self.transcripts.context(self.conversation)[1],
+                "compacted_through": self.transcripts.memory(self.conversation)["through_revision"],
             }
+        if name == "memory":
+            return self.transcripts.memory(self.conversation)
         if name == "history":
             return self.transcripts.history(self.conversation, params.get("before"))
         if name == "compact":

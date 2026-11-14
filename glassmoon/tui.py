@@ -231,6 +231,15 @@ class Terminal:
         )
         self.log(window, text)
 
+    async def show_memory(self, window):
+        memory = await call(self.socket, f"agent.{window}", "memory", {})
+        through = memory["through_revision"]
+        if not through:
+            self.log(window, "No conversation summary has been saved.")
+            return
+        self.log(window, f"Saved summary through revision {through} of {memory['revision']}")
+        self.log(window, memory["summary"])
+
     async def tool_status(self, window):
         result = await call(self.socket, f"agent.{window}", "tool_status", {})
         if "policy_revision" in result:
@@ -551,11 +560,15 @@ class Terminal:
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                     self.log(self.active, "/model [auto|default|PROVIDER[/MODEL]] in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
+                    self.log(self.active, "/memory shows the saved conversation summary")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.compact(window), window)
+                case "/memory" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.show_memory(window), window)
                 case "/tools" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.tool_status(window), window)

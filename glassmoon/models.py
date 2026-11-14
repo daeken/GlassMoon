@@ -223,6 +223,18 @@ class Transcripts:
             raise fail("unknown_conversation", "Conversation does not exist")
         return row[0]
 
+    def memory(self, identifier):
+        row = self.db.execute(
+            """SELECT c.revision, COALESCE(k.through_revision, 0), COALESCE(k.summary, '')
+               FROM conversations c LEFT JOIN compactions k ON k.conversation=c.id
+               WHERE c.id=?""",
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            raise fail("unknown_conversation", "Conversation does not exist")
+        revision, through, summary = row
+        return {"revision": revision, "through_revision": through, "summary": summary}
+
     def context(self, identifier):
         snapshot = self.db.execute(
             """SELECT c.revision, COALESCE(k.through_revision, 0), COALESCE(k.summary, ''), m.value
