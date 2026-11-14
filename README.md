@@ -119,6 +119,44 @@ result = asyncio.run(call_tool(
 print(result["structuredContent"]["result"])
 ```
 
+### Give an agent a browser
+
+Install Playwright's browser binaries once, then start one worker per engine. The default is headless. Add `--headed` to see its windows.
+
+```sh
+uv run --locked playwright install chromium webkit
+uv run --locked python -m glassmoon.browser --socket "$GLASSMOON_SOCKET" \
+  --name browser.chromium --engine chromium
+uv run --locked python -m glassmoon.browser --socket "$GLASSMOON_SOCKET" \
+  --name browser.webkit --engine webkit
+```
+
+Give an agent `--tool-service browser.chromium` or `--tool-service browser.webkit`. Open a window and keep the returned handle for navigation, inspection, JavaScript, screenshots, and input. `wait_for` checks an observable selector and optional text. `actions` runs an ordered sequence of clicks, typing, keypresses, and scrolls within one window. Browser contexts start fresh and have independent storage. A worker replacement closes its old contexts.
+
+Screenshots use viewport coordinates and arrive as image tool results. The router selects a model declaring `tool_images` and image input once a screenshot tool is available. The OpenAI example catalog includes this support. The runloop retains the latest screenshot within the IPC frame budget. Browser tools are also callable in Python with `glassmoon.toolbox.call_tool`. The TUI command `/tools` probes the agent's currently configured tool services.
+
+### Attach the macOS desktop
+
+On macOS 14 or newer, build the native helper and start the desktop service.
+
+```sh
+mkdir -p target
+swiftc -parse-as-library native/desktop.swift -o target/glassmoon-desktop
+uv run --locked python -m glassmoon.desktop --socket "$GLASSMOON_SOCKET"
+```
+
+The desktop service captures the main display, including other visible apps. The helper reports the macOS Screen Recording and Accessibility permissions. Start the service with `--allow-input` to publish native clicks, typing, keypresses, and scrolling. Add `--target-pid PID` to require that app to be frontmost and keep pointer actions within its visible windows. Coordinate actions use the latest main-display screenshot dimensions. Attach the service to an agent with `--tool-service desktop`.
+
+### Keep shared working notes
+
+Moon's scratchpad stores revisioned notes in SQLite. Use a dedicated absolute database path and add `--tool-service tools.scratchpad` to agents that should share it.
+
+```sh
+GLASSMOON_SCRATCHPAD_PATH="/absolute/path/scratchpad.sqlite3" \
+  uv run --locked python -m glassmoon.toolbox --socket "$GLASSMOON_SOCKET" \
+  --name tools.scratchpad examples/moon_scratchpad.py
+```
+
 ### Supervise a local worker
 
 Moon wrote the `moon.text` example service, which fingerprints UTF-8 text and exposes a deterministic health probe. The supervisor starts a worker, validates probe fields, restarts it after repeated failures or process exit, and can send an incident to a named maintainer agent.

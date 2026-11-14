@@ -23,6 +23,7 @@ from .workspace_tools import Workspace
 
 METHODS = {
     "info": method("Show agent identity and model settings"),
+    "tool_status": method("Probe local and shared tool availability"),
     "compact": method("Summarize older complete turns into durable context"),
     "history": method(
         "Read a page of agent chat history", optional={"before": INTEGER}
@@ -90,6 +91,7 @@ class Agent:
         definitions = list(self.workspace.definitions) if self.workspace else []
         routes = {}
         images = set()
+        status = {}
         for service in self.tool_services:
             try:
                 async with asyncio.timeout(5):
@@ -119,6 +121,7 @@ class Agent:
                     for name, tool in additions.items()
                     if tool["name"] in image_names
                 )
+                status[service] = {"state": "available", "count": len(additions)}
             except (
                 RequestError,
                 ProtocolError,
@@ -129,6 +132,7 @@ class Agent:
                 TypeError,
                 AttributeError,
             ):
+                status[service] = {"state": "unavailable", "count": 0}
                 if stream:
                     await emit(
                         {
@@ -136,7 +140,7 @@ class Agent:
                             "message": f"Tool service {service} unavailable or invalid.",
                         }
                     )
-        return definitions, routes, images
+        return definitions, routes, images, status
 
     async def execute(self, item, routes):
         if item["name"] in routes:
@@ -159,7 +163,7 @@ class Agent:
         }
 
     async def generate(self, history, user, emit, stream, summary=""):
-        definitions, routes, images = await self.discover_tools(emit, stream)
+        definitions, routes, images, _ = await self.discover_tools(emit, stream)
         requirements = self.requirements.copy()
         if images:
             requirements["tool_images"] = True
@@ -283,6 +287,21 @@ class Agent:
         )
 
     async def handle(self, name, params, emit, stream):
+        if name == "tool_status":
+            definitions, routes, images, status = await self.discover_tools(
+                emit, stream
+            )
+            return {
+                "services": status,
+                "tools": [
+                    {
+                        "name": tool["name"],
+                        "service": routes.get(tool["name"], (None,))[0],
+                        "returns_image": tool["name"] in images,
+                    }
+                    for tool in definitions
+                ],
+            }
         if name == "info":
             return {
                 "agent": self.identity,

@@ -166,6 +166,15 @@ class Terminal:
         )
         self.log(window, text)
 
+    async def tool_status(self, window):
+        result = await call(self.socket, f"agent.{window}", "tool_status", {})
+        for service, status in result["services"].items():
+            self.log(window, f"{service}  {status['state']}  {status['count']} tools")
+        for tool in result["tools"]:
+            self.log(
+                window, f"{tool['name']}{'  [image]' if tool['returns_image'] else ''}"
+            )
+
     def start(self, operation, window="status"):
         async def run():
             try:
@@ -205,7 +214,7 @@ class Terminal:
                 case "/help":
                     self.log(
                         self.active,
-                        "/query NAME  /compact  /services  /describe NAME|ID  /models  /status  /quit",
+                        "/query NAME  /compact  /tools  /services  /describe NAME|ID  /models  /status  /quit",
                     )
                     self.log(
                         self.active,
@@ -216,6 +225,9 @@ class Terminal:
                 case "/compact" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.compact(window), window)
+                case "/tools" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.tool_status(window), window)
                 case "/services":
                     self.select("status")
                     self.start(self.list_services)

@@ -1,0 +1,114 @@
+"""Explicitly attach the macOS main display to a GlassMoon tool service."""
+
+import asyncio
+import json
+from pathlib import Path
+
+from .ipc import ProtocolError, RequestError
+from .models import INTEGER, TEXT
+from .service import fail, serve, service_args
+from .toolbox import METHODS, ToolService, tool
+
+TOOLS = {
+    "status": tool(
+        "Check main display dimensions and macOS capture and input permissions."
+    ),
+    "screenshot": tool(
+        "Capture the macOS main display at the current screenshot coordinate scale."
+    ),
+    "click": tool(
+        "Click at coordinates from the latest main display screenshot.",
+        {"x": INTEGER, "y": INTEGER},
+    ),
+    "type_text": tool(
+        "Type text into the current focused macOS control.", {"text": TEXT}
+    ),
+    "press": tool(
+        "Send Enter, Tab, Space, Backspace, Escape, or an arrow key.", {"key": TEXT}
+    ),
+    "scroll": tool(
+        "Scroll at the current macOS pointer position.", {"dx": INTEGER, "dy": INTEGER}
+    ),
+}
+TOOLS["screenshot"]["returns_image"] = True
+
+
+class Desktop:
+    def __init__(self, helper, allow_input, target_pid=None):
+        self.helper = helper
+        self.allow_input = allow_input
+        self.target_pid = target_pid
+        self.lock = asyncio.Lock()
+
+    async def invoke(self, action, args):
+        if action not in ("status", "screenshot") and not self.allow_input:
+            raise fail("input_disabled", "Start the desktop service with --allow-input")
+        async with self.lock:
+            process = await asyncio.create_subprocess_exec(
+                self.helper,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                async with asyncio.timeout(15):
+                    data, _ = await process.communicate(
+                        json.dumps(
+                            args | {"action": action, "target_pid": self.target_pid}
+                        ).encode()
+                    )
+            finally:
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    await process.wait()
+        if process.returncode != 0:
+            raise fail(
+                "desktop_helper", "The native desktop helper exited unsuccessfully"
+            )
+        result = json.loads(data)
+        if "error" in result:
+            raise fail(result["error"], result["message"])
+        return result
+
+
+def main():
+    parser = service_args(__doc__, "desktop")
+    parser.add_argument("--helper", type=Path, default=Path("target/glassmoon-desktop"))
+    parser.add_argument(
+        "--allow-input",
+        action="store_true",
+        help="Expose real desktop mouse and keyboard actions",
+    )
+    parser.add_argument(
+        "--target-pid",
+        type=int,
+        help="Allow input only while this macOS application is frontmost",
+    )
+    args = parser.parse_args()
+    if args.target_pid is not None and not 1 <= args.target_pid <= 2_147_483_647:
+        parser.error("--target-pid must be a valid macOS process ID")
+    try:
+        bridge = Desktop(
+            args.helper.resolve(strict=True), args.allow_input, args.target_pid
+        )
+        tools = (
+            TOOLS
+            if args.allow_input
+            else {name: TOOLS[name] for name in ("status", "screenshot")}
+        )
+        service = ToolService(tools, bridge.invoke)
+        asyncio.run(
+            serve(args.socket, args.name, args.replace, METHODS, service.handle)
+        )
+    except KeyboardInterrupt:
+        return 130
+    except (RequestError, ProtocolError, EOFError, OSError) as error:
+        parser.exit(1, f"{error}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

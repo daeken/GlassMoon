@@ -10,19 +10,12 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 
 from .ipc import ProtocolError, RequestError
 from .models import ARRAY, INTEGER, TEXT, within_reply_limit
-from .service import fail, method, serve, service_args
-from .toolbox import METHODS, ToolService
+from .service import fail, serve, service_args
+from .toolbox import METHODS, ToolService, tool
 
 VIEWPORT = {"width": 768, "height": 512}
 IMAGE_LIMIT = 21_000
 TIMEOUT = 10_000
-
-
-def tool(description, required=None, optional=None):
-    return {
-        "description": description,
-        "parameters": method(description, required, optional)["params_schema"],
-    }
 
 
 WINDOW = {"window": TEXT}

@@ -16,6 +16,13 @@ METHODS = {
 }
 
 
+def tool(description, required=None, optional=None):
+    return {
+        "description": description,
+        "parameters": method(description, required, optional)["params_schema"],
+    }
+
+
 def validate_name(name):
     if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name):
         raise fail(
