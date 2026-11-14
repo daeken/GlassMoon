@@ -468,8 +468,24 @@ class Terminal:
     async def watch_task(self, identifier):
         revision = None
         last_event = None
+        retry_delay = 1
         while True:
-            row = await call_tool(self.socket, self.mailbox, "get", {"id": identifier})
+            try:
+                async with asyncio.timeout(5):
+                    row = await call_tool(self.socket, self.mailbox, "get", {"id": identifier})
+            except (EOFError, OSError, ProtocolError, TimeoutError, RequestError) as error:
+                if isinstance(error, RequestError) and (
+                    error.generation is not None or error.code not in {"busy", "unavailable"}
+                ):
+                    raise
+                if retry_delay == 1:
+                    self.log("status", f"Task {identifier} watch waiting for the mailbox.")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 5)
+                continue
+            if retry_delay != 1:
+                self.log("status", f"Task {identifier} watch reconnected.")
+                retry_delay = 1
             progress = row.get("progress", [])
             if row["revision"] != revision:
                 self.log("status", f"Task {identifier}  {row['status']}  attempt {row['attempts']}")

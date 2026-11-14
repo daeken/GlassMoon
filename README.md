@@ -240,7 +240,7 @@ A dispatcher claims each task with a renewable lease. After losing a reply, the 
 
 Use `/timeline ID` to see when the mailbox recorded claims, tool events, replies, and review decisions across attempts. The view distinguishes an agent reply from operator verification. Tasks created before recording was enabled have a partial timeline.
 
-Use `/watch-task ID` to follow a task as it runs. The watch reports changes and stops at a saved reply, review, or cancellation. Run the command again to stop watching sooner.
+Use `/watch-task ID` to follow a task as it runs. The watch reconnects after a broker or mailbox outage and stops at a saved reply, review, or cancellation. Run the command again to stop watching sooner.
 
 An agent can set `parent` to the current task ID when it submits a handoff. `/children ID` lists those related tasks, and a child's `/task ID` view shows its parent. Each task retains its own reply and review state.
 

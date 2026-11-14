@@ -505,6 +505,29 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("review" in line for line in lines))
         self.assertEqual(terminal.watched_tasks, {})
 
+    async def test_terminal_watch_recovers_after_mailbox_disconnect(self):
+        running = {
+            "revision": 2, "attempts": 1, "status": "running", "progress": [
+                {"event_index": 1, "name": "fixture", "phase": "started"},
+            ],
+        }
+        unavailable = RequestError({"code": "unavailable", "message": "No active mailbox"})
+        responses = [running, EOFError(), unavailable, running, running | {
+            "revision": 3, "status": "done",
+        }]
+        terminal = Terminal(None, "unused")
+        with (
+            patch("glassmoon.tui.call_tool", AsyncMock(side_effect=responses)),
+            patch("glassmoon.tui.asyncio.sleep", AsyncMock()) as sleep,
+        ):
+            await terminal.watch_task("fixture")
+        self.assertEqual([item.args[0] for item in sleep.await_args_list], [1, 1, 2, 1])
+        lines = list(terminal.windows["status"])
+        self.assertEqual(sum("waiting" in line for line in lines), 1)
+        self.assertEqual(sum("reconnected" in line for line in lines), 1)
+        self.assertEqual(sum("started" in line for line in lines), 1)
+        self.assertTrue(any("done" in line for line in lines))
+
     def test_cancel_unclaimed_task_without_disrupting_an_admitted_worker(self):
         task = self.rpc("submit", **TASK)
         options = {
