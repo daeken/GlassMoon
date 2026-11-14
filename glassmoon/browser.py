@@ -24,6 +24,8 @@ TIMEOUT = 10_000
 
 WINDOW = {"window": TEXT}
 POSITION = {"x": INTEGER, "y": INTEGER}
+REGION = POSITION | {"width": INTEGER, "height": INTEGER}
+REGION_SCHEMA = {"type": "object", "properties": REGION, "required": list(REGION), "additionalProperties": False}
 ACTION_STEPS = ("click", "type_text", "press", "scroll", "element", "wait_for")
 TOOLS = {
     "open": tool(
@@ -78,7 +80,7 @@ TOOLS = {
     ),
     "screenshot_region": tool(
         "Capture a region within the browser viewport. Coordinates and dimensions are CSS pixels.",
-        WINDOW | POSITION | {"width": INTEGER, "height": INTEGER},
+        WINDOW | REGION,
     ),
     "click": tool("Click at viewport coordinates in this window.", WINDOW | POSITION),
     "type_text": tool(
@@ -104,11 +106,13 @@ TOOLS["screenshot_region"]["returns_image"] = True
 SHARE = tool(
     "Explicitly publish this viewport screenshot and a short reproduction summary. Include no secrets. Returns a share key.",
     WINDOW | {"owner": TEXT, "key": TEXT, "summary": TEXT},
+    {"region": REGION_SCHEMA},
 )
 SHARE_CHECKED = tool(
     "Publish a screenshot after checking exact visible text in one CSS-matched element. "
     "Includes the observed text and check time in the evidence. Share non-sensitive fixture text only.",
     WINDOW | {"owner": TEXT, "key": TEXT, "summary": TEXT, "selector": TEXT, "expected": TEXT},
+    {"region": REGION_SCHEMA},
 )
 
 
@@ -348,7 +352,10 @@ class Browser:
             locator = page.locator("css=" + selector)
             url = page.url
             await self.check_visible_text(locator, expected)
-        shot = await self.page_action("screenshot", page, {})
+        region = args.get("region")
+        if region is not None and (not isinstance(region, dict) or region.keys() != REGION.keys()):
+            raise fail("invalid_region", "Supply x, y, width, and height for the shared region")
+        shot = await self.page_action("screenshot" if region is None else "screenshot_region", page, region or {})
         kinds = {}
         for event in window.diagnostics:
             kind = event["kind"]
@@ -359,6 +366,8 @@ class Browser:
             "height": shot["height"],
             "diagnostic_counts": kinds,
         }
+        if region is not None:
+            metadata["region"] = {field: shot[field] for field in REGION}
         if checked:
             observed = await self.check_visible_text(locator, expected)
             if url != page.url or url != shot["url"]:

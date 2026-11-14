@@ -79,8 +79,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                     {"action": "element", "operation": "fill", "by": "label", "name": "Fixture note", "text": text},
                     {"action": "element", "operation": "click", "by": "role", "role": "button", "name": "Save"},
                 ]})
-                record = await worker.invoke("share_checked", args | {"key": key, "expected": text})
+                region = {"x": 10, "y": 105, "width": 300, "height": 70}
+                record = await worker.invoke("share_checked", args | {"key": key, "expected": text, "region": region})
                 self.assertEqual(record["metadata"]["visible_text_check"]["observed"], text)
+                self.assertEqual(record["metadata"]["region"], region)
             with self.assertRaises(RequestError) as error:
                 await worker.invoke("share_checked", args | {"key": "failed", "expected": "First save"})
             self.assertEqual(error.exception.code, "text_mismatch")
