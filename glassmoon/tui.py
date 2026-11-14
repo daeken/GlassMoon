@@ -285,10 +285,18 @@ class Terminal:
         for model in result["models"]:
             inputs = ", ".join(model["input_modalities"])
             outputs = ", ".join(model["output_modalities"])
+            capabilities = [f"{model['context_tokens']:,} context tokens"]
+            if maximum := model.get("max_output_tokens"):
+                capabilities.append(f"{maximum:,} max output tokens")
+            if model.get("streaming"):
+                capabilities.append("streaming")
+            if model.get("tool_calls"):
+                capabilities.append("tools")
+            if model.get("tool_images"):
+                capabilities.append("tool images")
             self.log(
                 "status",
-                f"{model['provider']}/{model['id']}  {inputs} → {outputs}  "
-                f"{model['context_tokens']:,} tokens",
+                f"{model['provider']}/{model['id']}  {inputs} → {outputs}  " + " · ".join(capabilities),
             )
         for provider in result["unavailable"]:
             self.log("status", f"{provider} catalog unavailable")
