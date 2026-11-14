@@ -26,6 +26,11 @@ from .workspace_tools import Workspace
 METHODS = {
     "info": method("Show agent identity and model settings"),
     "tool_status": method("Probe local and shared tool availability"),
+    "tool_policy": method("Read the revisioned shared tool settings"),
+    "set_tool_policy": method(
+        "Change shared tool membership for subsequent turns",
+        {"service": TEXT, "mode": TEXT, "expected_revision": INTEGER},
+    ),
     "compact": method("Summarize older complete turns into durable context"),
     "history": method(
         "Read a page of agent chat history", optional={"before": INTEGER}
@@ -105,12 +110,34 @@ class Agent:
         self.workspace = workspace
         self.tool_services = tuple(dict.fromkeys(tool_services))
 
-    async def discover_tools(self, emit, stream):
+    def tool_policy(self, state=None):
+        revision, overrides = (
+            self.transcripts.tool_policy(self.conversation) if state is None else state
+        )
+        enabled = [
+            service
+            for service in self.tool_services
+            if overrides.get(service) != "disable"
+        ]
+        enabled.extend(
+            service
+            for service, mode in overrides.items()
+            if mode == "enable" and service not in self.tool_services
+        )
+        return {"revision": revision, "overrides": overrides, "enabled": enabled}
+
+    async def discover_tools(self, emit, stream, policy=None):
+        if policy is None:
+            policy = self.tool_policy()
         definitions = list(self.workspace.definitions) if self.workspace else []
         routes = {}
         images = set()
-        status = {}
-        for service in self.tool_services:
+        status = {
+            service: {"state": "disabled", "count": 0}
+            for service, mode in policy["overrides"].items()
+            if mode == "disable"
+        }
+        for service in policy["enabled"]:
             try:
                 async with asyncio.timeout(5):
                     generation, remote = await tool_catalog(self.socket, service)
@@ -329,11 +356,33 @@ class Agent:
             if receipt["reply"] is None:
                 return {"status": "started"}
             return {"status": "done", "reply": receipt["reply"]}
+        if name == "tool_policy":
+            return self.tool_policy()
+        if name == "set_tool_policy":
+            service, mode, expected = (
+                params["service"], params["mode"], params["expected_revision"]
+            )
+            if mode not in ("enable", "disable", "default"):
+                raise fail("invalid_tool_mode", "Choose enable, disable, or default")
+            if not isinstance(service, str) or not re.fullmatch(
+                r"[A-Za-z0-9_.-]{1,61}", service
+            ):
+                raise fail(
+                    "invalid_tool_service", "Choose a service name that fits tool namespaces"
+                )
+            if type(expected) is not int or not 0 <= expected < 2**63 - 1:
+                raise fail("invalid_revision", "Expected a valid tool policy revision")
+            state = self.transcripts.set_tool_policy(
+                self.conversation, expected, service, mode
+            )
+            return self.tool_policy(state)
         if name == "tool_status":
+            policy = self.tool_policy()
             definitions, routes, images, status = await self.discover_tools(
-                emit, stream
+                emit, stream, policy
             )
             return {
+                "policy_revision": policy["revision"],
                 "services": status,
                 "tools": [
                     {
@@ -350,7 +399,7 @@ class Agent:
                 "service": self.router,
                 "requirements": self.requirements,
                 "tools": self.workspace.names if self.workspace else [],
-                "tool_services": list(self.tool_services),
+                "tool_services": self.tool_policy()["enabled"],
                 "compacted_through": self.transcripts.context(self.conversation)[1],
             }
         if name == "history":

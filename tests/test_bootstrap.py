@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from mcp import StdioServerParameters
 
 from glassmoon.agent import Agent
+from glassmoon.ipc import RequestError
 from glassmoon.mcp_bridge import Bridge
 from glassmoon.models import Transcripts
 from glassmoon.toolbox import load
@@ -27,6 +28,45 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_policy_rolls_back_and_survives_replacement(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder, "agent.db")
+            store = Transcripts(path)
+            agent = Agent("", "moon", "models", {}, "", store, tool_services=["mcp.base"])
+
+            async def change(target, service, mode, revision):
+                return await target.handle(
+                    "set_tool_policy",
+                    {"service": service, "mode": mode, "expected_revision": revision},
+                    ignore, False,
+                )
+
+            added = await change(agent, "mcp.new", "enable", 0)
+            self.assertEqual(added["enabled"], ["mcp.base", "mcp.new"])
+            with self.assertRaises(RequestError) as conflict:
+                await change(agent, "mcp.base", "disable", 0)
+            self.assertEqual(conflict.exception.code, "policy_changed")
+            await change(agent, "mcp.base", "disable", added["revision"])
+            store.close()
+
+            store = Transcripts(path)
+            self.addCleanup(store.close)
+            replacement = Agent(
+                "", "moon", "models", {}, "", store, tool_services=["mcp.base", "mcp.fresh"],
+            )
+            catalog = AsyncMock(side_effect=OSError)
+            with patch("glassmoon.agent.tool_catalog", catalog):
+                status = await replacement.handle("tool_status", {}, ignore, False)
+            self.assertEqual(status["policy_revision"], 2)
+            self.assertEqual(status["services"]["mcp.base"]["state"], "disabled")
+            self.assertEqual(status["services"]["mcp.new"]["state"], "unavailable")
+            self.assertEqual([item.args[1] for item in catalog.await_args_list], ["mcp.fresh", "mcp.new"])
+            policy = await change(replacement, "mcp.base", "default", 2)
+            self.assertEqual(policy["enabled"], ["mcp.base", "mcp.fresh", "mcp.new"])
+            policy = await change(replacement, "mcp.new", "default", 3)
+            self.assertEqual(policy["enabled"], ["mcp.base", "mcp.fresh"])
+            self.assertEqual(policy["overrides"], {})
+
     async def test_summary_survives_agent_restart_and_keeps_history(self):
         with tempfile.TemporaryDirectory() as folder:
             database = Path(folder) / "agent.db"

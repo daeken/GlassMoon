@@ -167,6 +167,10 @@ class Transcripts:
                 digest TEXT NOT NULL, reply TEXT,
                 PRIMARY KEY (conversation, task_id, attempt)
             );
+            CREATE TABLE IF NOT EXISTS tool_policies (
+                conversation TEXT PRIMARY KEY REFERENCES conversations(id),
+                revision INTEGER NOT NULL, overrides TEXT NOT NULL
+            );
         """)
 
     def close(self):
@@ -281,6 +285,36 @@ class Transcripts:
                 "INSERT INTO task_receipts (conversation, task_id, attempt, digest) VALUES (?, ?, ?, ?)",
                 (identifier, task_id, attempt, digest),
             )
+
+    def tool_policy(self, identifier):
+        row = self.db.execute(
+            "SELECT revision, overrides FROM tool_policies WHERE conversation=?",
+            (identifier,),
+        ).fetchone()
+        return (row[0], json.loads(row[1])) if row else (0, {})
+
+    def set_tool_policy(self, identifier, expected, service, mode):
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            revision, overrides = self.tool_policy(identifier)
+            if revision != expected:
+                raise fail("policy_changed", "Read the current tool policy before updating it")
+            if overrides.get(service, "default") == mode:
+                return revision, overrides
+            if mode == "default":
+                overrides.pop(service, None)
+            else:
+                if len(overrides) >= 32 and service not in overrides:
+                    raise fail("policy_limit", "Clear a tool override before setting another")
+                overrides[service] = mode
+            revision += 1
+            self.db.execute(
+                """INSERT INTO tool_policies VALUES (?, ?, ?)
+                   ON CONFLICT(conversation) DO UPDATE SET
+                       revision=excluded.revision, overrides=excluded.overrides""",
+                (identifier, revision, json.dumps(overrides)),
+            )
+            return revision, overrides
 
     def append(self, identifier, revision, *messages, receipt=None):
         with self.db:

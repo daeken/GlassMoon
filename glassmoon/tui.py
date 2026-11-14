@@ -188,12 +188,30 @@ class Terminal:
 
     async def tool_status(self, window):
         result = await call(self.socket, f"agent.{window}", "tool_status", {})
+        if "policy_revision" in result:
+            self.log(window, f"Tool settings revision {result['policy_revision']}")
         for service, status in result["services"].items():
-            self.log(window, f"{service}  {status['state']}  {status['count']} tools")
+            generation = f"  #{status['generation']}" if "generation" in status else ""
+            self.log(window, f"{service}  {status['state']}  {status['count']} tools{generation}")
         for tool in result["tools"]:
             self.log(
                 window, f"{tool['name']}{'  [image]' if tool['returns_image'] else ''}"
             )
+
+    async def change_tool(self, window, argument):
+        parts = argument.split()
+        if len(parts) != 2 or parts[0] not in ("enable", "disable", "default"):
+            self.log(window, "Usage /tool enable|disable|default SERVICE")
+            return
+        mode, service = parts
+        agent = f"agent.{window}"
+        policy = await call(self.socket, agent, "tool_policy", {})
+        updated = await call(
+            self.socket, agent, "set_tool_policy",
+            {"service": service, "mode": mode, "expected_revision": policy["revision"]},
+        )
+        membership = "enabled" if service in updated["enabled"] else "disabled"
+        self.log(window, f"{service} {membership} for new turns. Use /tools to check availability.")
 
     async def list_tasks(self, agent):
         params = {"agent": agent} if agent else {}
@@ -328,6 +346,7 @@ class Terminal:
                     )
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
+                    self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -336,6 +355,9 @@ class Terminal:
                 case "/tools" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.tool_status(window), window)
+                case "/tool" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.change_tool(window, argument), window)
                 case "/tasks":
                     self.select("status")
                     self.start(lambda: self.list_tasks(argument.removeprefix("agent.")))
