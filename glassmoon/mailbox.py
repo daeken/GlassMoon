@@ -421,7 +421,6 @@ class Mailbox:
         rows = db.execute(f"""
             SELECT id, sender, agent, key, status, revision, attempts, lease_until, available_at,
                    CASE WHEN status IN ('done','review') THEN result END AS recorded_result,
-                   EXISTS(SELECT 1 FROM task_evidence WHERE task_id=tasks.id) AS has_evidence,
                    recovery_check IS NOT NULL AS has_recovery_check,
                    COALESCE((SELECT observed_at FROM task_events WHERE task_id=tasks.id
                              ORDER BY seq DESC LIMIT 1), updated_at) AS last_activity,
@@ -445,6 +444,13 @@ class Mailbox:
             if result:
                 task["result_excerpt"] = result[:240]
                 task["result_excerpt_truncated"] = len(result) > 240
+            refs = db.execute(
+                "SELECT owner, key, attempt FROM task_evidence WHERE task_id=? ORDER BY owner, key LIMIT 3",
+                (task["id"],),
+            ).fetchall()
+            task["has_evidence"] = int(bool(refs))
+            task["evidence"] = [dict(ref) for ref in refs[:2]]
+            task["more_evidence"] = len(refs) > 2
             tasks.append(task)
         return {"observed_at": now, "tasks": tasks, "more": len(rows) > limit}
 

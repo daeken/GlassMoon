@@ -6,7 +6,7 @@
 - `/queue-check AGENT CHECK | TASK` — queue a task with a check to perform if its outcome becomes uncertain.
 - `/queue-evidence AGENT OWNER KEY | TASK` — confirm an observation exists and include it in the recipient's first delivery.
 - `/tasks` — list tasks and their current status.
-- `/handoff` — see work needing review, work in progress, queued tasks, and recent replies. Entries show last recorded activity, whether the recipient has an active worker, and whether there is a recovery check or linked evidence. Completed replies and saved partial replies in review include a short excerpt. Follow `/task ID` for the full reply.
+- `/handoff` — see work needing review, work in progress, queued tasks, and recent replies. Entries show last recorded activity, whether the recipient has an active worker, and any recovery check or linked evidence references. Completed replies and saved partial replies in review include a short excerpt. Follow `/task ID` for the full reply and evidence list.
 - `/task ID` — inspect a task and any recorded result.
 - `/children ID` — find tasks delegated from this task.
 - `/review [PARENT]` — list tasks with uncertain outcomes. Supply a parent ID to see only its children.

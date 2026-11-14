@@ -461,7 +461,11 @@ class Terminal:
                 detail += f" · lease until {until}"
             if task["has_recovery_check"]:
                 detail += " · recovery check saved"
-            if task["has_evidence"]:
+            if references := task.get("evidence"):
+                detail += " · evidence " + ", ".join(f"{ref['owner']}/{ref['key']}" for ref in references)
+                if task.get("more_evidence"):
+                    detail += " and more"
+            elif task["has_evidence"]:
                 detail += " · evidence linked"
             if task.get("last_tool") and task["status"] in ("running", "review"):
                 detail += f" · {task['last_tool']} {task['last_tool_phase']}"
