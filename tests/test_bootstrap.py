@@ -37,6 +37,12 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             store = Transcripts(state)
             self.addCleanup(store.close)
             agent = Agent("", "moon", "models", {"provider": "first", "min_context_tokens": 1234}, "", store)
+            for revision in (0, 2, 4):
+                store.append(
+                    "moon", revision,
+                    {"role": "user", "content": "old question " + "x" * 4800},
+                    {"role": "assistant", "content": "old answer " + "x" * 4800},
+                )
             entered = asyncio.Event()
             resume = asyncio.Event()
             seen = []
@@ -46,6 +52,7 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 if len(seen) == 1:
                     entered.set()
                     await resume.wait()
+                    return {"message": {"role": "assistant", "content": "Remember the oldest turn"}}
                 return {"message": {"role": "assistant", "content": "ready"}}
 
             async def change(target, **params):
@@ -71,7 +78,9 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("provider", auto["requirements"])
                 restored = await change(replacement, mode="default", expected_revision=2)
                 self.assertEqual(restored["requirements"]["provider"], "first")
-            self.assertEqual([params["provider"] for params in seen], ["first", "second"])
+            self.assertEqual([params["provider"] for params in seen], ["first", "first", "second"])
+            self.assertIn("Summarize", json.dumps(seen[0]["messages"]))
+            self.assertIn("Remember the oldest turn", json.dumps(seen[1]["messages"]))
             self.assertEqual(seen[-1]["model"], "chosen")
             self.assertEqual(seen[-1]["min_context_tokens"], 1234)
             self.assertIn("first question", json.dumps(seen[-1]["messages"]))
