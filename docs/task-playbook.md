@@ -21,6 +21,8 @@ Find the parent task with `/tasks`, then open `/task ID` and `/children ID`. Use
 
 For a visual check, follow the `/evidence OWNER KEY` reference shown by `/task ID`. The evidence view gives the observation and its screenshot digest. Use `/save-image OWNER KEY PATH` to inspect the screenshot locally. For example, a screenshot showing `Saved: Semantic handoff` can verify what the fixture displayed. Record that observation with `/resolve ID REVISION verified NOTE` when the task only asked for a visible confirmation.
 
+After a browser replacement, open a fresh window for a new read-only observation. A `stale_window` response means the old window belongs to a different worker, and reopening can reset page-local state. If a write was interrupted, verify the original operation using a durable receipt or app state before deciding whether to retry. Keep unresolved writes in review.
+
 ## Ambiguous outcomes
 
 A timeout or worker exit does not prove that a tool had no effect. Ambiguous work stays in review until its receipt and effects can be checked. Do not automatically replay it. Reconciliation can recover a completed receipt; if no reliable receipt exists, record independently verified completion with `verified`, requeue when a retry is warranted, or cancel the task.
