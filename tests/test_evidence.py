@@ -89,9 +89,11 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await export_image("", "tools.evidence", "moon", "key", output), output)
                 self.assertEqual(output.read_bytes(), raw)
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
-                with self.assertRaises(FileExistsError):
+                with self.assertRaises(FileExistsError) as exists:
                     await export_image("", "tools.evidence", "moon", "key", output)
+                self.assertEqual(exists.exception.filename, output)
                 self.assertEqual(output.read_bytes(), raw)
+                self.assertEqual(list(output.parent.iterdir()), [output])
                 response["image_sha256"] = "wrong"
                 suspect = output.with_name("other.jpg")
                 with self.assertRaises(RequestError) as integrity:

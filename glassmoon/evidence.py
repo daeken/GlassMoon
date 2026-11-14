@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import tempfile
 import time
 from contextlib import closing
 from pathlib import Path
@@ -69,13 +70,16 @@ async def export_image(socket, service, owner, key, destination):
     if hashlib.sha256(raw).hexdigest() != evidence["image_sha256"]:
         raise fail("image_integrity", "Screenshot does not match the saved digest")
     path = Path(destination).expanduser().absolute()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".glassmoon-image-")
     try:
         with os.fdopen(fd, "wb") as output:
             output.write(raw)
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise FileExistsError(error.errno, error.strerror, path) from None
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     return path
 
 
