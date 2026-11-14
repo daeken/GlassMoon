@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from . import functions
 from .chatgpt_auth import DEFAULT_PROFILE, RESOURCE, AuthError, Profile, login
 from .ipc import ProtocolError, RequestError
 from .models import (
@@ -24,6 +25,7 @@ from .models import (
     within_reply_limit,
 )
 from .service import add_service_args, fail, method, serve
+from .sse import events
 
 METHODS = {
     "models": CATALOG,
@@ -73,26 +75,6 @@ def openai_message(item):
     return {"type": "message", "role": role, "content": content}
 
 
-async def events(response):
-    data = []
-    async for line in response.aiter_lines():
-        if line.startswith("data:"):
-            data.append(line[5:].lstrip(" "))
-        elif not line and data:
-            payload = "\n".join(data)
-            data.clear()
-            if payload != "[DONE]":
-                try:
-                    event = json.loads(payload)
-                except ValueError:
-                    raise fail(
-                        "provider_protocol", "OpenAI sent invalid event data"
-                    ) from None
-                if not isinstance(event, dict):
-                    raise fail("provider_protocol", "OpenAI sent an invalid event")
-                yield event
-
-
 def check_status(response):
     if response.status_code == 401:
         raise fail(
@@ -100,6 +82,26 @@ def check_status(response):
         )
     if response.status_code != 200:
         raise fail("openai_http", f"OpenAI returned HTTP {response.status_code}")
+
+
+def tool_input(exchange):
+    preserved = exchange.get("state", {}).get("items", [])
+    if not isinstance(preserved, list) or any(
+        item.get("type") not in ("function_call", "reasoning", "message")
+        for item in preserved
+    ):
+        raise fail("invalid_tool_history", "Unexpected OpenAI continuation item")
+    return [
+        *preserved,
+        *(
+            {
+                "type": "function_call_output",
+                "call_id": call["id"],
+                "output": exchange["outputs"][call["id"]],
+            }
+            for call in exchange["calls"]
+        ),
+    ]
 
 
 class OpenAI:
@@ -158,6 +160,25 @@ class OpenAI:
             "store": False,
             "stream": True,
         }
+        tools = functions.definitions(params)
+        rounds = functions.history(params)
+        if tools or rounds:
+            if not model.get("tool_calls", False):
+                raise fail(
+                    "tools_unsupported",
+                    "This model is not configured for function calling",
+                )
+            body["tools"] = [
+                {
+                    "type": "namespace",
+                    "name": "workspace",
+                    "description": "Local tools provided by the GlassMoon agent.",
+                    "tools": [{"type": "function", **tool} for tool in tools],
+                }
+            ]
+            body["include"] = ["reasoning.encrypted_content"]
+            for exchange in rounds:
+                body["input"].extend(tool_input(exchange))
         text = []
         size = 0
         try:
@@ -185,31 +206,52 @@ class OpenAI:
                                 await emit({"type": "text", "text": delta})
                         case "response.completed":
                             upstream = event["response"]
+                            items = upstream.get("output", [])
+                            announced = functions.calls(
+                                [
+                                    {
+                                        "id": item["call_id"],
+                                        "name": item["name"],
+                                        "arguments": item["arguments"],
+                                    }
+                                    for item in items
+                                    if item.get("type") == "function_call"
+                                ]
+                            )
                             content = [
                                 {
                                     "type": "text",
                                     "text": part.get("text", part.get("refusal", "")),
                                 }
-                                for item in upstream.get("output", [])
+                                for item in items
                                 if item.get("type") == "message"
                                 for part in item.get("content", [])
                                 if part.get("type") in ("output_text", "refusal")
                             ]
-                            if not content and not text:
+                            if not content and not text and not announced:
                                 raise fail(
                                     "empty_response", "OpenAI returned no text content"
                                 )
-                            return within_reply_limit(
-                                {
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": content
-                                        or [{"type": "text", "text": "".join(text)}],
-                                    },
-                                    "model": model["id"],
-                                    "usage": upstream.get("usage"),
+                            result = {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": content
+                                    or [{"type": "text", "text": "".join(text)}],
+                                },
+                                "model": model["id"],
+                                "usage": upstream.get("usage"),
+                            }
+                            if announced:
+                                result["tool_calls"] = announced
+                                result["tool_state"] = {
+                                    "items": [
+                                        item
+                                        for item in items
+                                        if item.get("type")
+                                        in ("function_call", "reasoning", "message")
+                                    ]
                                 }
-                            )
+                            return within_reply_limit(result)
                         case "response.failed" | "response.incomplete" | "error":
                             details = event.get("response", {}).get("error") or {}
                             code = details.get("code") or event.get("code")

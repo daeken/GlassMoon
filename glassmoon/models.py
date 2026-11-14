@@ -6,6 +6,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from .functions import TOOL_FIELDS
 from .service import fail, method
 
 TEXT = {"type": "string"}
@@ -30,6 +31,7 @@ CAPABILITY = {
         "context_tokens": {"type": "integer", "minimum": 1},
         "max_output_tokens": {"type": "integer", "minimum": 1},
         "streaming": BOOLEAN,
+        "tool_calls": BOOLEAN,
     },
     "required": [
         "id",
@@ -42,7 +44,7 @@ CAPABILITY = {
 GENERATE = method(
     "Generate a reply from a transcript",
     {"model": TEXT, "messages": {"type": "array", "items": MESSAGE}},
-    {"output_modalities": ARRAY},
+    {"output_modalities": ARRAY, **TOOL_FIELDS},
 )
 CATALOG = method(
     "List model capabilities",
@@ -79,6 +81,8 @@ def capabilities(model):
             raise fail("invalid_model", f"{key} must be a positive integer")
     if type(model.get("streaming")) is not bool:
         raise fail("invalid_model", "streaming must be a boolean")
+    if "tool_calls" in model and type(model["tool_calls"]) is not bool:
+        raise fail("invalid_model", "tool_calls must be a boolean")
     return model
 
 

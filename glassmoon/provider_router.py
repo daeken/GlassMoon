@@ -2,6 +2,7 @@
 
 import asyncio
 
+from . import functions
 from .ipc import ProtocolError, RequestError, call, connect
 from .models import (
     ARRAY,
@@ -27,6 +28,7 @@ METHODS = {
             "min_context_tokens": INTEGER,
             "provider": TEXT,
             "model": TEXT,
+            **functions.TOOL_FIELDS,
         },
     ),
 }
@@ -97,6 +99,15 @@ class Router:
         if "input_modalities" in params:
             inputs |= modalities(params["input_modalities"])
         outputs = modalities(params.get("output_modalities", ["text"]))
+        tools = functions.definitions(params)
+        rounds = functions.history(params)
+        if rounds and (
+            not tools or not params.get("provider") or not params.get("model")
+        ):
+            raise fail(
+                "invalid_tool_history",
+                "Pin continuation to the provider and model that requested the calls",
+            )
         min_context = params.get("min_context_tokens", 1)
         if type(min_context) is not int or min_context < 1:
             raise fail(
@@ -116,6 +127,7 @@ class Router:
                 and outputs <= set(item["output_modalities"])
                 and item["context_tokens"] >= min_context
                 and (not stream or item["streaming"])
+                and (not tools or item.get("tool_calls", False))
             ),
             None,
         )
@@ -126,6 +138,15 @@ class Router:
             )
 
         provider = selected["provider"]
+        request = {
+            "model": selected["id"],
+            "messages": messages,
+            "output_modalities": sorted(outputs),
+        }
+        if tools:
+            request["tools"] = tools
+        if rounds:
+            request["tool_history"] = rounds
 
         async def forward(chunk):
             if not isinstance(chunk, dict) or chunk.get("type") not in outputs:
@@ -139,11 +160,7 @@ class Router:
                 self.socket,
                 provider,
                 "generate",
-                {
-                    "model": selected["id"],
-                    "messages": messages,
-                    "output_modalities": sorted(outputs),
-                },
+                request,
                 version=selected["interface_version"],
                 on_chunk=forward if stream else None,
             )
@@ -152,6 +169,12 @@ class Router:
                 "provider_unavailable", f"Connection to {provider} ended"
             ) from None
         reply = message(result["message"])
+        announced = functions.calls(result.get("tool_calls", []))
+        if announced and not tools:
+            raise fail(
+                "invalid_provider_reply",
+                "Provider requested tools that were not enabled",
+            )
         actual = input_modalities([reply])
         if reply["role"] != "assistant" or not actual <= outputs:
             raise fail(
