@@ -44,7 +44,8 @@ TOOLS = {
         {"id": TEXT, "action": TEXT, "note": TEXT, "expected_revision": INTEGER},
     ),
     "reconcile": tool(
-        "Recover a completed agent receipt for a task awaiting review", {"id": TEXT}
+        "Recover a completed agent receipt for a task awaiting review",
+        {"id": TEXT}, {"attempt": INTEGER},
     ),
 }
 # Dispatcher operations stay available over IPC without being advertised to models.
@@ -480,15 +481,17 @@ class MailboxService(ToolService):
     def __init__(self, mailbox, socket):
         async def invoke(name, arguments):
             if name == "reconcile":
-                return await self.reconcile(arguments["id"])
+                return await self.reconcile(arguments["id"], arguments.get("attempt"))
             return await asyncio.to_thread(mailbox.request, name, arguments)
 
         super().__init__(TOOLS, invoke)
         self.socket = socket
         self.mailbox = mailbox
 
-    async def reconcile(self, identifier):
+    async def reconcile(self, identifier, attempt=None):
         task = await self.invoke("get", {"id": identifier})
+        if attempt is not None and task["attempts"] != attempt:
+            raise fail("attempt_changed", "A newer task attempt has already started")
         if task["status"] == "done":
             return task
         if task["status"] != "review":

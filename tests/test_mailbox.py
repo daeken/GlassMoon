@@ -242,6 +242,36 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             (task["id"], "done", "Saved once"),
         )
 
+    async def test_dispatcher_can_reconcile_if_finish_arrives_after_expiry(self):
+        task = self.rpc("submit", **TASK)
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+        reply = {"message": {"role": "assistant", "content": "Saved once"}}
+
+        async def agent(*_args, **_kwargs):
+            self.now += 31
+            return reply
+
+        async def route(method, fields):
+            if method == "reconcile":
+                worker = MailboxService(self.box, "socket")
+                with patch("glassmoon.mailbox.call", AsyncMock(return_value={"status": "done", "reply": reply})):
+                    return await worker.reconcile(fields["id"], fields["attempt"])
+            return self.rpc(method, **fields)
+
+        generation = AsyncMock(side_effect=agent)
+        with (
+            patch.object(dispatcher, "online", AsyncMock(return_value=True)),
+            patch.object(dispatcher, "rpc", side_effect=route),
+            patch("glassmoon.dispatcher.call", generation),
+        ):
+            result = await dispatcher.deliver()
+        self.assertEqual((result["id"], result["status"], result["attempts"]), (task["id"], "done", 1))
+        generation.assert_awaited_once()
+        worker = MailboxService(self.box, "socket")
+        with self.assertRaises(RequestError) as mismatch:
+            await worker.reconcile(task["id"], 2)
+        self.assertEqual(mismatch.exception.code, "attempt_changed")
+
     async def test_saved_partial_reply_keeps_task_in_review(self):
         task = self.rpc("submit", **TASK)
         dispatcher = Dispatch("", "tools.mailbox", "tide")
