@@ -164,11 +164,13 @@ class Terminal:
     async def older_history(self, window):
         await self.query(window)
         async with self.history_loading[window]:
+            self.search_page.pop(window, None)
             cursor = self.history_before[window]
             if cursor is None:
                 notice = "Reached the start of the saved conversation."
                 if window not in self.history_page:
                     self.log(window, notice)
+                self.dirty = True
                 return
             entries, before = await self.load_history(window, {"before": cursor})
             self.history_page[window] = entries
@@ -180,12 +182,17 @@ class Terminal:
     async def latest_history(self, window):
         await self.query(window)
         async with self.history_loading[window]:
-            self.history_before[window] = self.latest_before[window]
-            self.history_page.pop(window, None)
+            self.leave_history(window)
             if self.active == window:
                 self.scroll = 0
                 self.scroll_to_top = False
             self.dirty = True
+
+    def leave_history(self, window):
+        if window in self.latest_before:
+            self.history_before[window] = self.latest_before[window]
+        self.history_page.pop(window, None)
+        self.search_page.pop(window, None)
 
     async def find_history(self, window, query):
         async with self.history_loading.setdefault(window, asyncio.Lock()):
@@ -196,25 +203,29 @@ class Terminal:
             before = None
         else:
             saved = self.search_page.get(window)
-            if not saved or saved[1] is None:
+            if not saved:
+                self.leave_history(window)
                 self.log(window, "No earlier search page. Use /find TEXT to start a search.")
                 return
-            query, before = saved
+            query, before, _ = saved
+            if before is None:
+                return
         params = {"query": query}
         if before is not None:
             params["before"] = before
         result = await call(self.socket, f"agent.{window}", "find_history", params)
-        self.search_page[window] = (query, result["before"])
-        self.history_page.pop(window, None)
-        if self.active == window:
-            self.scroll = 0
-            self.scroll_to_top = False
-        for item in result["matches"]:
-            self.log(window, f"{item['position'] + 1}  {item['role']}  {item['snippet']}")
-        if not result["matches"]:
-            self.log(window, "No matching messages on this page.")
+        entries = [
+            terminal_text(f"{item['position'] + 1}  {item['role']}  {item['snippet']}")
+            for item in result["matches"]
+        ]
+        if not entries:
+            entries.append("No matching messages.")
         if result["before"] is not None:
-            self.log(window, "Use /find again for earlier matches.")
+            entries.append("Use /find again for earlier matches.")
+        self.search_page[window] = (query, result["before"], entries)
+        if self.active == window:
+            self.scroll_to_top = True
+        self.dirty = True
 
     async def list_models(self):
         result = await call(self.socket, "models", "models", {})
@@ -604,6 +615,8 @@ class Terminal:
                 RequestError,
                 ValueError,
             ) as error:
+                if window in self.history_page or window in self.search_page:
+                    self.leave_history(window)
                 self.log(window, str(error))
 
         task = asyncio.create_task(run())
@@ -629,6 +642,8 @@ class Terminal:
         if text.startswith("/") and not text.startswith("//"):
             command, _, argument = text.partition(" ")
             argument = argument.strip()
+            if command not in {"/find", "/older", "/latest", "/status", "/query"}:
+                self.leave_history(self.active)
             match command:
                 case "/quit":
                     return False
@@ -785,9 +800,7 @@ class Terminal:
             self.log(self.active, "This agent is still replying.")
         else:
             window = self.active
-            self.history_page.pop(window, None)
-            if window in self.latest_before:
-                self.history_before[window] = self.latest_before[window]
+            self.leave_history(window)
             self.sending.add(window)
             self.start(
                 lambda: self.chat(window, text[1:] if text.startswith("//") else text),
@@ -855,9 +868,15 @@ class Terminal:
             self.screen.refresh()
             self.dirty = False
             return
-        browsing = self.active in self.history_page
+        search = self.search_page.get(self.active)
+        browsing = search is not None or self.active in self.history_page
         history_label = ""
-        if browsing:
+        if search is not None:
+            query, before, _ = search
+            history_label = f"  |  search {terminal_text(query)}"
+            if before is None:
+                history_label += "  |  last page"
+        elif browsing:
             history_label = "  |  saved history"
             if self.history_before[self.active] is None:
                 history_label += "  |  start of conversation"
@@ -868,7 +887,9 @@ class Terminal:
             curses.A_REVERSE,
         )
         lines = []
-        entries = list(self.history_page.get(self.active, self.windows[self.active]))
+        entries = list(
+            search[2] if search else self.history_page.get(self.active, self.windows[self.active])
+        )
         if self.active in self.partial and not browsing:
             entries.append(f"<{self.active}> {self.partial[self.active]}")
         for entry in entries:

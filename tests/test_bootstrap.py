@@ -191,6 +191,32 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 list("012345678"),
             )
 
+    async def test_tui_search_pages_leave_live_chat_and_older_history_intact(self):
+        terminal = Terminal(None, "")
+        terminal.windows["moon"] = deque(["live message"], maxlen=500)
+        terminal.select("moon")
+        terminal.loaded.add("moon")
+        terminal.history_before["moon"] = 5
+        terminal.latest_before["moon"] = 8
+        terminal.history_page["moon"] = ["older history"]
+        with patch("glassmoon.tui.call", side_effect=[
+            {"matches": [{"position": 7, "role": "user", "snippet": "newest"}], "before": 7},
+            {"matches": [{"position": 3, "role": "user", "snippet": "earlier"}], "before": None},
+        ]) as call:
+            await terminal.find_history("moon", "keyword")
+            self.assertEqual(terminal.search_page["moon"][2][0], "8  user  newest")
+            await terminal.find_history("moon", "")
+            self.assertEqual(terminal.search_page["moon"][2], ["4  user  earlier"])
+            await terminal.find_history("moon", "")
+            self.assertEqual(call.await_count, 2)
+            self.assertEqual(call.await_args.args[3], {"query": "keyword", "before": 7})
+            self.assertEqual(terminal.history_page["moon"], ["older history"])
+            await terminal.latest_history("moon")
+        self.assertNotIn("moon", terminal.search_page)
+        self.assertNotIn("moon", terminal.history_page)
+        self.assertEqual(terminal.history_before["moon"], 8)
+        self.assertEqual(list(terminal.windows["moon"]), ["live message"])
+
     def test_short_history_pages_keep_every_cursor_position(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))
