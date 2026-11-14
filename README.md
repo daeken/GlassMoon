@@ -172,6 +172,8 @@ uv run --locked python -m glassmoon.evidence --socket "$GLASSMOON_SOCKET" --stat
 
 The browser's `share` tool publishes a screenshot with an owner, key, and reproduction summary. It includes the viewport dimensions, engine, and counts of diagnostic categories. Share the owner and key in the mailbox task. The recipient can read the summary and explicitly request the image. The image call verifies the stored SHA-256 digest. Review what is visible before choosing to share, since the screenshot includes page content.
 
+Use `/save-image OWNER KEY PATH` in the TUI to save a shared screenshot. The client checks the digest and creates a new local file with owner-only permissions. Choose an unused destination.
+
 ### Attach the macOS desktop
 
 On macOS 14 or newer, build the native helper and start the desktop service.

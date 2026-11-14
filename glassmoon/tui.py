@@ -10,6 +10,7 @@ import uuid
 from collections import deque
 from datetime import datetime
 
+from .evidence import export_image
 from .ipc import ProtocolError, RequestError, call, connect
 from .models import result_text
 from .toolbox import call_tool
@@ -25,10 +26,11 @@ def terminal_text(value):
 
 
 class Terminal:
-    def __init__(self, screen, socket, mailbox="tools.mailbox"):
+    def __init__(self, screen, socket, mailbox="tools.mailbox", evidence="tools.evidence"):
         self.screen = screen
         self.socket = socket
         self.mailbox = mailbox
+        self.evidence = evidence
         self.windows = {"status": deque(maxlen=500)}
         self.active = "status"
         self.services = {}
@@ -385,6 +387,19 @@ class Terminal:
         if page["before"] is not None:
             self.log("status", f"Use /timeline {identifier} {page['before']} for earlier events.")
 
+    async def save_evidence(self, argument):
+        parts = argument.split(maxsplit=2)
+        if len(parts) != 3:
+            self.log("status", "Usage /save-image OWNER KEY PATH")
+            return
+        owner, key, path = parts
+        try:
+            saved = await export_image(self.socket, self.evidence, owner, key, path)
+        except FileExistsError:
+            self.log("status", "That path already exists. Choose a new path to save the screenshot.")
+            return
+        self.log("status", f"Saved verified screenshot to {saved}")
+
     async def resolve_task(self, arguments):
         fields = arguments.split(maxsplit=3)
         if len(fields) != 4 or not fields[1].isdecimal():
@@ -492,6 +507,7 @@ class Terminal:
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
+                    self.log(self.active, "/save-image OWNER KEY PATH saves a shared screenshot")
                     self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
                     self.log(self.active, "/more-tasks pages through your last task list")
@@ -559,6 +575,9 @@ class Terminal:
                 case "/timeline" if argument:
                     self.select("status")
                     self.start(lambda: self.task_timeline(argument))
+                case "/save-image" if argument:
+                    self.select("status")
+                    self.start(lambda: self.save_evidence(argument))
                 case "/children" if argument:
                     self.select("status")
                     self.start(lambda: self.list_tasks(parent=argument))
@@ -742,11 +761,12 @@ def main():
     parser.add_argument(
         "--mailbox", default="tools.mailbox", help="Task service for /tasks and /task"
     )
+    parser.add_argument("--evidence", default="tools.evidence", help="Evidence service for /save-image")
     args = parser.parse_args()
     try:
         curses.wrapper(
             lambda screen: asyncio.run(
-                Terminal(screen, args.socket, args.mailbox).run(args.query)
+                Terminal(screen, args.socket, args.mailbox, args.evidence).run(args.query)
             )
         )
     except KeyboardInterrupt:

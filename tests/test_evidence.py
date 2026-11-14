@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-from glassmoon.evidence import Evidence
+from glassmoon.evidence import Evidence, export_image
 from glassmoon.ipc import RequestError
 
 
@@ -49,3 +50,24 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(RequestError) as integrity:
                 worker.request("image", ref)
             self.assertEqual(integrity.exception.code, "image_integrity")
+
+
+class ExportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_export_verifies_bytes_and_refuses_to_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence.jpg"
+            raw = b"\xff\xd8fixture"
+            response = {"image": jpeg(raw), "image_sha256": hashlib.sha256(raw).hexdigest()}
+            with patch("glassmoon.evidence.call_tool", AsyncMock(return_value=response)):
+                self.assertEqual(await export_image("", "tools.evidence", "moon", "key", output), output)
+                self.assertEqual(output.read_bytes(), raw)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                with self.assertRaises(FileExistsError):
+                    await export_image("", "tools.evidence", "moon", "key", output)
+                self.assertEqual(output.read_bytes(), raw)
+                response["image_sha256"] = "wrong"
+                suspect = output.with_name("other.jpg")
+                with self.assertRaises(RequestError) as integrity:
+                    await export_image("", "tools.evidence", "moon", "key", suspect)
+                self.assertEqual(integrity.exception.code, "image_integrity")
+                self.assertFalse(suspect.exists())

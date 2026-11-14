@@ -5,6 +5,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -13,7 +14,7 @@ from .functions import image_part
 from .ipc import ProtocolError, RequestError
 from .models import OBJECT, TEXT, encoded_size
 from .service import fail, serve, service_args
-from .toolbox import METHODS, ToolService, tool
+from .toolbox import METHODS, ToolService, call_tool, tool
 
 TOOLS = {
     "publish": tool(
@@ -39,7 +40,7 @@ def identifier(value):
     )
 
 
-def screenshot_digest(image):
+def screenshot_bytes(image):
     if not image_part(image):
         raise fail("invalid_image", "Use a bounded JPEG or PNG screenshot tool result")
     header, payload = image["url"].split(",", 1)
@@ -50,7 +51,27 @@ def screenshot_digest(image):
     magic = b"\xff\xd8" if header == "data:image/jpeg;base64" else b"\x89PNG\r\n\x1a\n"
     if not raw.startswith(magic):
         raise fail("invalid_image", "Screenshot bytes do not match the declared format")
-    return hashlib.sha256(raw).hexdigest()
+    return raw
+
+
+def screenshot_digest(image):
+    return hashlib.sha256(screenshot_bytes(image)).hexdigest()
+
+
+async def export_image(socket, service, owner, key, destination):
+    evidence = await call_tool(socket, service, "image", {"owner": owner, "key": key})
+    raw = screenshot_bytes(evidence["image"])
+    if hashlib.sha256(raw).hexdigest() != evidence["image_sha256"]:
+        raise fail("image_integrity", "Screenshot does not match the saved digest")
+    path = Path(destination).expanduser().absolute()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(raw)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 class Evidence:
