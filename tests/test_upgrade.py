@@ -268,6 +268,8 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(description["result"]["maintainer"], "moon")
 
             terminal = Terminal(None, socket)
+            await terminal.show_maintainer("echo")
+            self.assertIn(f"echo #{latest}  maintainer moon", terminal.windows["status"][-1])
             queue = AsyncMock()
             with patch.object(terminal, "queue_task", queue):
                 terminal.input = f"/maintain echo#{previous} Stale handoff"

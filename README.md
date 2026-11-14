@@ -282,7 +282,7 @@ Use a fresh service name or stop any existing worker before starting the supervi
 
 The supervisor waits through a broker outage while the worker is still running. When the broker is reachable again, the worker has the configured probe timeout to re-register before failed probes count toward a restart.
 
-Workers can declare a maintainer with `--maintainer AGENT`. `/services` and `/describe` show the declaration for that generation. `/maintain SERVICE TASK` queues work for the current generation's maintainer and records the service and generation in the task. Use `SERVICE#GENERATION` to require a specific active generation at lookup. The maintainer can receive the task after coming online.
+Workers can declare a maintainer with `--maintainer AGENT`. `/maintainer SERVICE` shows the active generation and its declared maintainer. `/services` and `/describe` also display this metadata. `/maintain SERVICE TASK` queues work for the current generation's maintainer and records the service and generation in the task. Use `SERVICE#GENERATION` to require a specific active generation at lookup. The maintainer can receive the task after coming online.
 
 ### Recover after a broker restart
 

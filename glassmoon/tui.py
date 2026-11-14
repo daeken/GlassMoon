@@ -11,7 +11,7 @@ from collections import deque
 from datetime import datetime
 
 from .evidence import export_image
-from .ipc import ProtocolError, RequestError, call, connect
+from .ipc import ProtocolError, RequestError, active_service, call, connect
 from .models import result_text
 from .toolbox import call_tool, inspect_tool
 
@@ -540,9 +540,7 @@ class Terminal:
         )
 
     async def queue_maintainer(self, service, instruction, generation=None):
-        async with connect(self.socket) as wire:
-            rows = (await wire.request("list", "list"))["result"]["services"]
-        active = next((row for row in rows if row["name"] == service and row["state"] == "active"), None)
+        active = await active_service(self.socket, service)
         if generation is not None and (not active or active["generation"] != generation):
             self.log("status", f"{service} changed generation. Check /services before queuing the task.")
             return
@@ -553,6 +551,17 @@ class Terminal:
             active["maintainer"],
             f"Service {service}, generation {active['generation']} at submission.\n\n{instruction}",
         )
+
+    async def show_maintainer(self, service):
+        active = await active_service(self.socket, service)
+        if active is None:
+            self.log("status", f"No active service named {service}.")
+            return
+        prefix = f"{service} #{active['generation']}"
+        if not active.get("maintainer"):
+            self.log("status", f"{prefix} has no declared maintainer.")
+            return
+        self.log("status", f"{prefix}  maintainer {active['maintainer']}  mailbox {self.mailbox}")
 
     def start(self, operation, window="status"):
         async def run():
@@ -616,6 +625,7 @@ class Terminal:
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
                     self.log(self.active, "/more-tasks pages through your last task list")
                     self.log(self.active, "/maintain SERVICE[#GENERATION] TASK queues work for the maintainer")
+                    self.log(self.active, "/maintainer SERVICE shows the active generation's maintainer")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                     self.log(self.active, "/describe-tool SERVICE TOOL shows the tool's inputs")
                     self.log(self.active, "/model [auto|default|PROVIDER[/MODEL]] in an agent window")
@@ -662,6 +672,9 @@ class Terminal:
                     expected = int(generation) if marker else None
                     self.select("status")
                     self.start(lambda: self.queue_maintainer(service, instruction.strip(), expected))
+                case "/maintainer" if argument:
+                    self.select("status")
+                    self.start(lambda: self.show_maintainer(argument))
                 case "/queue" | "/queue-check" if " " in argument:
                     agent, _, body = argument.partition(" ")
                     recovery = None

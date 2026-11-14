@@ -80,6 +80,14 @@ async def connect(path):
             pass
 
 
+async def active_service(path, name):
+    async with connect(path) as wire:
+        services = (await wire.request("list", "list"))["result"]["services"]
+    return next(
+        (row for row in services if row["name"] == name and row["state"] == "active"), None
+    )
+
+
 async def call(
     path, service, method, params, *, on_chunk=None, version=1, generation=None,
     envelope=False,
