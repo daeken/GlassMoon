@@ -330,3 +330,42 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         expired = self.rpc("get", id=task["id"])
         self.assertEqual(expired["status"], "review")
         self.assertEqual(expired["recovery_check"], args["recovery_check"])
+
+    def test_timeline_pages_attempts_and_records_verification_distinctly(self):
+        task = self.rpc("submit", **TASK)
+        identifier = task["id"]
+        self.rpc("submit", **TASK)
+        lease = self.rpc("claim", agent="tide", lease_seconds=1)
+        for index in range(1, 21):
+            event = {
+                "id": identifier, "token": lease["token"], "index": index,
+                "name": "save_note", "phase": "failed" if index == 20 else "started",
+            }
+            self.rpc("progress", **event)
+            self.rpc("progress", **event)
+        self.now += 2
+        review = self.rpc("get", id=identifier)
+        self.rpc(
+            "review", id=identifier, expected_revision=review["revision"],
+            action="requeue", note="Confirmed fixture is ready for a repeat attempt",
+        )
+        self.rpc("claim", agent="tide", lease_seconds=1)
+        self.now += 2
+        review = self.rpc("get", id=identifier)
+        self.rpc(
+            "review", id=identifier, expected_revision=review["revision"],
+            action="verified", note="Confirmed local receipt exactly once",
+        )
+        self.box = Mailbox(self.path, clock=lambda: self.now)
+        newer = self.rpc("timeline", id=identifier)
+        older = self.rpc("timeline", id=identifier, before=newer["before"])
+        self.assertIsNone(older["before"])
+        events = list(reversed(newer["events"] + older["events"]))
+        expected = (
+            [(0, "submitted"), (1, "claimed")] + [(1, "tool")] * 20
+            + [(1, "lease_expired"), (1, "requeued"), (2, "claimed"),
+               (2, "lease_expired"), (2, "verified")]
+        )
+        self.assertEqual([(event["attempt"], event["kind"]) for event in events], expected)
+        self.assertEqual(events[21]["phase"], "failed")
+        self.assertNotIn("result", events[-1])

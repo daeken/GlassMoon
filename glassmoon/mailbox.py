@@ -25,6 +25,10 @@ TOOLS = {
         optional={"agent": TEXT, "status": TEXT, "before": INTEGER, "limit": INTEGER},
     ),
     "get": tool("Read a task and any recorded result.", {"id": TEXT}),
+    "timeline": tool(
+        "Read paginated task state changes and tool events, newest first.",
+        {"id": TEXT}, {"before": INTEGER},
+    ),
     "review": tool(
         "Resolve an interrupted task. Choose requeue, cancel, or verified after checking its effects.",
         {"id": TEXT, "action": TEXT, "note": TEXT, "expected_revision": INTEGER},
@@ -103,6 +107,13 @@ class Mailbox:
                     name TEXT NOT NULL, phase TEXT NOT NULL, observed_at REAL NOT NULL,
                     PRIMARY KEY(task_id, attempt, event_index)
                 );
+                CREATE TABLE IF NOT EXISTS task_events (
+                    seq INTEGER PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES tasks(id),
+                    attempt INTEGER NOT NULL, kind TEXT NOT NULL,
+                    name TEXT, phase TEXT, observed_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS task_history ON task_events(task_id, seq);
             """)
             db.execute("BEGIN IMMEDIATE")
             if "recovery_check" not in {
@@ -116,15 +127,18 @@ class Mailbox:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
             now = self.clock()
-            db.execute(
+            expired = db.execute(
                 """
                 UPDATE tasks
                    SET status='review', token=NULL, lease_until=NULL, revision=revision+1,
                        review_note='Lease expired. Verify effects before retrying.', updated_at=?
                  WHERE status='running' AND lease_until<=?
+                RETURNING id, attempts
             """,
                 (now, now),
-            )
+            ).fetchall()
+            for task in expired:
+                self.event(db, now, task["id"], task["attempts"], "lease_expired")
             # Preserve lease expiry even when a method rejects a stale request.
             db.execute("SAVEPOINT operation")
             try:
@@ -148,6 +162,27 @@ class Mailbox:
             raise fail("unknown_tool", "Unknown mailbox method")
         with self.transaction() as (db, now):
             return getattr(self, method)(db, now, **args)
+
+    @staticmethod
+    def event(db, now, identifier, attempt, kind, name=None, phase=None):
+        db.execute(
+            "INSERT INTO task_events(task_id, attempt, kind, name, phase, observed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (identifier, attempt, kind, name, phase, now),
+        )
+
+    def timeline(self, db, _now, id, before=None):
+        if not db.execute("SELECT 1 FROM tasks WHERE id=?", (id,)).fetchone():
+            raise fail("unknown_task", "Task does not exist")
+        before = 2**63 - 1 if before is None else number(before, 1, 2**63 - 1, "before")
+        rows = db.execute(
+            """SELECT seq, attempt, kind, name, phase, observed_at FROM task_events
+               WHERE task_id=? AND seq<? ORDER BY seq DESC LIMIT 21""",
+            (id, before),
+        ).fetchall()
+        return {
+            "events": [dict(row) for row in rows[:20]],
+            "before": rows[19]["seq"] if len(rows) > 20 else None,
+        }
 
     def submit(self, db, now, sender, agent, key, task, recovery_check=None):
         sender, agent, key = (
@@ -177,6 +212,7 @@ class Mailbox:
         """,
             (identifier, sender, agent, key, task, recovery_check, now, now),
         )
+        self.event(db, now, identifier, 0, "submitted")
         return self.get(db, now, identifier)
 
     def get(self, db, _now, id):
@@ -223,6 +259,7 @@ class Mailbox:
             "INSERT INTO task_progress VALUES (?, ?, ?, ?, ?, ?)",
             (id, task["attempts"], index, name, phase, now),
         )
+        self.event(db, now, id, task["attempts"], "tool", name, phase)
         return {"recorded": True}
 
     def list_tasks(self, db, _now, agent=None, status=None, before=None, limit=20):
@@ -253,7 +290,7 @@ class Mailbox:
         duration = number(lease_seconds, 1, 600, "lease_seconds")
         row = db.execute(
             """
-            SELECT id FROM tasks WHERE agent=? AND status='queued' ORDER BY seq LIMIT 1
+            SELECT id, attempts FROM tasks WHERE agent=? AND status='queued' ORDER BY seq LIMIT 1
         """,
             (agent,),
         ).fetchone()
@@ -268,6 +305,7 @@ class Mailbox:
         """,
             (token, now + duration, now, row["id"]),
         )
+        self.event(db, now, row["id"], row["attempts"] + 1, "claimed")
         return {"task": self.get(db, now, row["id"]), "token": token}
 
     def renew(self, db, now, id, token, lease_seconds):
@@ -297,19 +335,23 @@ class Mailbox:
                     "finish_conflict", "This lease already recorded a different result"
                 )
             return self.get(db, now, id)
-        changed = db.execute(
+        task = db.execute(
             """
             UPDATE tasks SET status=?, token=NULL, lease_until=NULL, result=?,
                              revision=revision+1, updated_at=?
             WHERE id=? AND token=? AND status='running'
+            RETURNING attempts
         """,
             (status, result, now, id, token),
-        ).rowcount
-        if not changed:
+        ).fetchone()
+        if task is None:
             raise fail("stale_lease", "Task is no longer owned by that lease")
         db.execute(
             "INSERT INTO completions VALUES (?, ?, ?, ?)", (id, token, status, result)
         )
+        self.event(db, now, id, task["attempts"], {
+            "done": "reply_recorded", "review": "review_required", "queued": "delivery_deferred",
+        }[status])
         return self.get(db, now, id)
 
     def review(self, db, now, id, action, note, expected_revision):
@@ -320,11 +362,12 @@ class Mailbox:
         status = {"requeue": "queued", "cancel": "cancelled", "verified": "done"}[
             action
         ]
-        changed = db.execute(
+        task = db.execute(
             """
             UPDATE tasks SET status=?, review_note=?, result=COALESCE(?, result),
                              revision=revision+1, updated_at=?
             WHERE id=? AND status='review' AND revision=?
+            RETURNING attempts
         """,
             (
                 status,
@@ -334,12 +377,15 @@ class Mailbox:
                 id,
                 expected_revision,
             ),
-        ).rowcount
-        if not changed:
+        ).fetchone()
+        if task is None:
             raise fail(
                 "revision_conflict",
                 "Task state or revision changed. Read it before resolving.",
             )
+        self.event(db, now, id, task["attempts"], {
+            "requeue": "requeued", "cancel": "cancelled", "verified": "verified",
+        }[action])
         return self.get(db, now, id)
 
     def record_receipt(self, db, now, id, expected_revision, attempt, result):
@@ -356,6 +402,7 @@ class Mailbox:
             raise fail(
                 "revision_conflict", "Task state changed while checking its receipt"
             )
+        self.event(db, now, id, attempt, "receipt_recovered")
         return self.get(db, now, id)
 
     def settle_receipt(self, identifier, revision, attempt, result):

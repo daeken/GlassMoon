@@ -8,6 +8,7 @@ import textwrap
 import unicodedata
 import uuid
 from collections import deque
+from datetime import datetime
 
 from .ipc import ProtocolError, RequestError, call, connect
 from .models import result_text
@@ -296,6 +297,39 @@ class Terminal:
         await call_tool(self.socket, self.mailbox, "reconcile", {"id": identifier})
         await self.show_task(identifier)
 
+    async def task_timeline(self, argument):
+        identifier, separator, cursor = argument.partition(" ")
+        params = {"id": identifier}
+        if separator:
+            if not cursor.isascii() or not cursor.isdecimal():
+                raise ValueError("Usage /timeline ID [BEFORE]")
+            params["before"] = int(cursor)
+        page = await call_tool(self.socket, self.mailbox, "timeline", params)
+        self.log("status", f"Task {identifier} events in local time")
+        labels = {
+            "submitted": "Queued",
+            "claimed": "Claimed",
+            "lease_expired": "Lease expired, outcome unknown",
+            "reply_recorded": "Agent reply recorded",
+            "review_required": "Outcome needs review",
+            "delivery_deferred": "Delivery deferred",
+            "requeued": "Operator requeued task",
+            "cancelled": "Operator cancelled task",
+            "verified": "Operator recorded verification",
+            "receipt_recovered": "Recovered agent reply from receipt",
+        }
+        for event in reversed(page["events"]):
+            when = datetime.fromtimestamp(event["observed_at"]).strftime("%b %d %H:%M:%S")
+            detail = labels.get(event["kind"], event["kind"])
+            if event["kind"] == "tool":
+                detail = f"{event['name']} {event['phase']}"
+            attempt = f"  attempt {event['attempt']}" if event["attempt"] else ""
+            self.log("status", f"{when}{attempt}  {detail}")
+        if not page["events"]:
+            self.log("status", "No events recorded on this page.")
+        if page["before"] is not None:
+            self.log("status", f"Use /timeline {identifier} {page['before']} for earlier events.")
+
     async def resolve_task(self, arguments):
         fields = arguments.split(maxsplit=3)
         if len(fields) != 4 or not fields[1].isdecimal():
@@ -387,6 +421,7 @@ class Terminal:
                     )
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
+                    self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                 case "/status":
@@ -428,6 +463,9 @@ class Terminal:
                 case "/task" if argument:
                     self.select("status")
                     self.start(lambda: self.show_task(argument))
+                case "/timeline" if argument:
+                    self.select("status")
+                    self.start(lambda: self.task_timeline(argument))
                 case "/reconcile" if argument:
                     self.select("status")
                     self.start(lambda: self.reconcile_task(argument))
