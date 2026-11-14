@@ -532,10 +532,13 @@ class MailboxService(ToolService):
 
 def main():
     parser = service_args(__doc__, "tools.mailbox")
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     parser.add_argument(
         "--state", required=True, type=Path, help="SQLite mailbox database"
     )
     args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     try:
         worker = MailboxService(Mailbox(args.state), args.socket)
         asyncio.run(
@@ -545,6 +548,7 @@ def main():
                 args.replace,
                 METHODS,
                 worker.handle,
+                staged=args.staged,
                 reconnect=True,
                 maintainer=args.maintainer,
             )

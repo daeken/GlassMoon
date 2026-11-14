@@ -101,6 +101,7 @@ async def run(args):
             args.replace,
             METHODS,
             service.handle,
+            staged=args.staged,
             reconnect=True,
             maintainer=args.maintainer,
         )
@@ -111,6 +112,7 @@ def main():
     parser.add_argument("--socket", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--replace", type=int)
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     parser.add_argument("--maintainer", help="GlassMoon agent identity responsible for this service")
     parser.add_argument("--url", help="Streamable HTTP MCP endpoint")
     parser.add_argument(
@@ -126,8 +128,11 @@ def main():
         help="Forward a named environment variable to a stdio server",
     )
     parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     try:
-        asyncio.run(run(parser.parse_args()))
+        asyncio.run(run(args))
     except KeyboardInterrupt:
         return 130
     except (

@@ -210,8 +210,11 @@ class EvidenceService(ToolService):
 
 def main():
     parser = service_args(__doc__, "tools.evidence")
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     parser.add_argument("--state", required=True, type=Path)
     args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     try:
         evidence = Evidence(args.state)
         worker = EvidenceService(TOOLS, evidence.invoke)
@@ -222,6 +225,7 @@ def main():
                 args.replace,
                 METHODS,
                 worker.handle,
+                staged=args.staged,
                 reconnect=True,
                 maintainer=args.maintainer,
             )

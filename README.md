@@ -247,7 +247,7 @@ Add `--check-only` to run the probe while leaving the candidate staged. A later 
 
 Shared tool workers expose `health` with `status` and their tool count. Agents report their identity and saved conversation revision. These probes check basic worker readiness. Use a service-specific probe when release depends on a downstream dependency.
 
-An agent or browser can also start with `--staged`. For an agent replacement, use the same state path and probe its saved revision before activation. For a browser replacement, old windows close when the old worker retires.
+Agents, browsers, the mailbox, the evidence service, and MCP bridges also accept `--staged`. Use the same state path for stateful replacements. For an agent, probe its saved revision before activation. For a browser replacement, old windows close when the old worker retires.
 
 Generation-specific calls require a broker that advertises the `generation_calls` feature. Rebuild and restart an older broker before using staged release or generation-bound tool and provider calls.
 
