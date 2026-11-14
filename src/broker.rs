@@ -42,6 +42,7 @@ struct Call {
 
 struct Invocation {
     service: String,
+    generation: Option<PeerId>,
     interface_version: u32,
     method: String,
     params: Value,
@@ -146,9 +147,14 @@ impl Broker {
                 self.ok(peer, &id, self.snapshot());
             }
             Command::Register { interface } => self.register(peer, &id, interface),
-            Command::Promote { expected_active } => self.promote(peer, &id, expected_active),
+            Command::Promote { expected_active } => self.promote(peer, &id, peer, expected_active),
+            Command::Activate {
+                generation,
+                expected_active,
+            } => self.promote(peer, &id, generation, expected_active),
             Command::Call {
                 service,
+                generation,
                 interface_version,
                 method,
                 params,
@@ -159,6 +165,7 @@ impl Broker {
                     id,
                     Invocation {
                         service,
+                        generation,
                         interface_version,
                         method,
                         params,
@@ -210,10 +217,10 @@ impl Broker {
         self.publish("registered", self.summary(peer));
     }
 
-    fn promote(&mut self, peer: PeerId, id: &str, expected_active: Option<PeerId>) {
+    fn promote(&mut self, caller: PeerId, id: &str, peer: PeerId, expected_active: Option<PeerId>) {
         let Some(candidate) = self.generations.get(&peer) else {
             self.error(
-                peer,
+                caller,
                 id,
                 "unknown_generation",
                 "Register a generation first",
@@ -222,7 +229,7 @@ impl Broker {
         };
         if !matches!(candidate.state, State::Staged) {
             self.error(
-                peer,
+                caller,
                 id,
                 "not_staged",
                 "Promotion requires a staged generation",
@@ -232,7 +239,7 @@ impl Broker {
         let name = candidate.interface.name.clone();
         if self.active.get(&name).copied() != expected_active {
             self.error(
-                peer,
+                caller,
                 id,
                 "active_changed",
                 "Refresh the active generation and try again",
@@ -249,7 +256,7 @@ impl Broker {
         }
 
         self.ok(
-            peer,
+            caller,
             id,
             json!({ "generation": peer, "previous": expected_active }),
         );
@@ -269,11 +276,12 @@ impl Broker {
     fn call(&mut self, client: PeerId, id: String, invocation: Invocation, stream: bool) {
         let Invocation {
             service: name,
+            generation,
             interface_version: version,
             method,
             params,
         } = invocation;
-        let Some(&generation) = self.active.get(&name) else {
+        let Some(generation) = generation.or_else(|| self.active.get(&name).copied()) else {
             self.error(
                 client,
                 &id,
@@ -282,7 +290,17 @@ impl Broker {
             );
             return;
         };
-        let service = &self.generations[&generation];
+        let Some(service) = self.generations.get(&generation).filter(|service| {
+            service.interface.name == name && !matches!(service.state, State::Draining { .. })
+        }) else {
+            self.error(
+                client,
+                &id,
+                "generation_unavailable",
+                "Requested generation cannot receive new calls",
+            );
+            return;
+        };
         if service.interface.interface_version != version {
             self.error(
                 client,

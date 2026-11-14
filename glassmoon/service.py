@@ -60,7 +60,17 @@ async def invoke(wire, message, handler):
     )
 
 
-async def serve(socket, name, replace, methods, handler, *, kind=None, on_ready=None):
+async def serve(
+    socket,
+    name,
+    replace,
+    methods,
+    handler,
+    *,
+    kind=None,
+    on_ready=None,
+    staged=False,
+):
     async with connect(socket) as wire:
         registration = await wire.request(
             "register",
@@ -70,9 +80,11 @@ async def serve(socket, name, replace, methods, handler, *, kind=None, on_ready=
             methods=methods,
             kind=kind,
         )
-        await wire.request("promote", "promote", expected_active=replace)
+        if not staged:
+            await wire.request("promote", "promote", expected_active=replace)
+        state = "staged" if staged else "active"
         print(
-            f"{name} active as generation {registration['result']['generation']}",
+            f"{name} {state} as generation {registration['result']['generation']}",
             flush=True,
         )
         if on_ready is not None:

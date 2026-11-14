@@ -51,8 +51,13 @@ pub enum Command {
     Promote {
         expected_active: Option<u64>,
     },
+    Activate {
+        generation: u64,
+        expected_active: Option<u64>,
+    },
     Call {
         service: String,
+        generation: Option<u64>,
         interface_version: u32,
         method: String,
         params: Value,

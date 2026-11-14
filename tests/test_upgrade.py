@@ -9,7 +9,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from glassmoon.echo import METHODS
-from glassmoon.ipc import connect
+from glassmoon.ipc import RequestError, call, connect
+from glassmoon.release import release
+from glassmoon.service import serve
 
 BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
@@ -141,6 +143,46 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.receive())["error"]["code"], "interface_mismatch")
             description = await client.request("describe", "describe", generation=latest)
             self.assertEqual(description["result"]["interface_version"], 2)
+
+    async def test_pre_promotion_probe_targets_only_staged_generation(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(10):
+            socket = await self.start_broker(stack, 5000)
+            old, previous = await self.register_old(stack, socket)
+            version = "bad"
+
+            async def handler(_name, _params, _emit, _stream):
+                return {"version": version}
+
+            ready = asyncio.Event()
+            candidate = asyncio.create_task(serve(
+                socket, "echo", None, METHODS, handler, staged=True, on_ready=ready.set,
+            ))
+
+            async def stop_candidate():
+                candidate.cancel()
+                await asyncio.gather(candidate, return_exceptions=True)
+
+            stack.push_async_callback(stop_candidate)
+            await ready.wait()
+            client = await stack.enter_async_context(connect(socket))
+            rows = (await client.request("list", "list"))["result"]["services"]
+            generation = next(item["generation"] for item in rows if item["state"] == "staged")
+            with self.assertRaises(RequestError) as failure:
+                await release(socket, generation, "echo", {"value": "test"}, {"version": "v2"})
+            self.assertEqual(failure.exception.code, "probe_mismatch")
+            await self.call(client, "still-old", "check")
+            received = await old.receive()
+            self.assertEqual(received["params"], {"value": "check"})
+
+            version = "v2"
+            promoted = await release(socket, generation, "echo", {"value": "test"}, {"version": "v2"})
+            self.assertEqual((promoted["previous"], promoted["generation"]), (previous, generation))
+            self.assertEqual(await call(socket, "echo", "echo", {"value": 1}), {"version": "v2"})
+            with self.assertRaises(RequestError) as draining:
+                await call(socket, "echo", "echo", {"value": 1}, generation=previous)
+            self.assertEqual(draining.exception.code, "generation_unavailable")
+            await old.send("complete", call_id=received["call_id"], status="ok", result={"version": "v1"})
+            self.assertEqual((await client.receive())["result"], {"version": "v1"})
 
 
 if __name__ == "__main__":

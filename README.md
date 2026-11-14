@@ -170,6 +170,18 @@ uv run --locked python -m glassmoon.dispatcher --socket "$GLASSMOON_SOCKET" --ag
 
 A dispatcher claims each task with a renewable lease. An expired lease or ambiguous delivery moves the task to `review`. Check the work's effects before calling the mailbox's `review` operation with the current task revision, a note, and `requeue` or `cancel`. The mailbox is shared among trusted broker clients.
 
+### Probe a candidate before switching traffic
+
+Workers that accept `--staged` register a candidate generation while the current generation keeps serving. Run the release command with the candidate ID printed by the worker.
+
+```sh
+uv run --locked python -m examples.moon_service --socket "$GLASSMOON_SOCKET" --staged
+uv run --locked python -m glassmoon.release --socket "$GLASSMOON_SOCKET" GENERATION \
+  --probe health --expect '{"status":"ok","version":1}'
+```
+
+The release command sends the probe to the specified generation and compares the result before attempting activation. The broker checks that the active generation still matches the one observed before the probe. A failed probe leaves normal traffic on its current route. A draining generation can finish its existing calls.
+
 ### Supervise a local worker
 
 Moon wrote the `moon.text` example service, which fingerprints UTF-8 text and exposes a deterministic health probe. The supervisor starts a worker, validates probe fields, restarts it after repeated failures or process exit, and can send an incident to a named maintainer agent.
@@ -180,7 +192,7 @@ uv run --locked python -m glassmoon.supervisor --socket "$GLASSMOON_SOCKET" \
   -- "$PWD/.venv/bin/python" -m examples.moon_service --socket "$GLASSMOON_SOCKET"
 ```
 
-Use a fresh service name or stop any existing worker before starting the supervisor. Recovery is bounded by the restart budget. The supervisor owns its child process group. A healthy probe after restart confirms the broker route is back. The maintainer receives the service name, probe failure, and restart status.
+Use a fresh service name or stop any existing worker before starting the supervisor. Recovery is bounded by the restart budget. The supervisor owns its child process group. A healthy probe after restart confirms the broker route is back. The maintainer receives the service name, probe failure, and restart status. Add `--mailbox tools.mailbox` to save that incident for dispatch even if the maintainer is offline.
 
 ## Try the live service cutover
 
@@ -233,8 +245,9 @@ Each message is a UTF-8 JSON object followed by a newline. JSON payloads are lim
 | `describe` | Send `generation` to retrieve its registered interface. |
 | `watch` | Get the initial snapshot, then receive `type: "event"` messages for registration, promotion, draining, and retirement. |
 | `register` | Send `name`, `interface_version`, and `methods`. Optionally set `kind` to `model_provider`. Each method includes `description`, `params_schema`, and `result_schema`. The broker returns a generation ID tied to this connection. |
+| `activate` | Send `generation` and `expected_active` to switch a staged generation into service from a separate trusted connection. |
 | `promote` | From the staged worker’s connection, send `expected_active` with the generation to replace, or `null` for an empty route. Promotion succeeds only if the expectation still matches. |
-| `call` | Send `service`, `interface_version`, `method`, and `params`. Set `stream: true` to receive chunks. The broker checks the active generation’s version and method. Workers validate arguments, using the declared schemas as an interface contract. |
+| `call` | Send `service`, `interface_version`, `method`, and `params`. Set `stream: true` to receive chunks. Optionally specify `generation` to call an exact active or staged generation. The broker checks the active generation’s version and method. Workers validate arguments, using the declared schemas as an interface contract. |
 
 The broker forwards work as `type: "invoke"` with `call_id`, `method`, and `params`. The worker replies with `type: "complete"`, the same `call_id`, and an outcome in the same format as a response. For streamed calls, a worker can send `type: "chunk"` with its `call_id` and `data` before completion. The broker forwards these as `type: "chunk"` with the caller's `id`, the worker's `generation`, and `data`. When promoted, a new generation takes all subsequent calls. The old worker receives a `draining` message with `deadline_ms`, followed by `retire` when its calls finish or the deadline expires. At expiry the broker fails unresolved calls with `drain_timeout` and the worker is expected to stop. A worker disconnect fails its admitted calls, and a caller disconnect leaves admitted work with its worker.
 

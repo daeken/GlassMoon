@@ -77,12 +77,20 @@ async def connect(path):
             pass
 
 
-async def call(path, service, method, params, *, on_chunk=None, version=1):
+async def call(
+    path, service, method, params, *, on_chunk=None, version=1, generation=None
+):
     """Call a service and await its final result, optionally handling chunks."""
     async with connect(path) as wire:
         await wire.send(
-            "call", id="call", service=service, method=method, params=params,
-            interface_version=version, stream=on_chunk is not None,
+            "call",
+            id="call",
+            service=service,
+            method=method,
+            params=params,
+            interface_version=version,
+            stream=on_chunk is not None,
+            **({"generation": generation} if generation is not None else {}),
         )
         while True:
             message = await wire.receive()

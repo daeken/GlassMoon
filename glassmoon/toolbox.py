@@ -109,11 +109,23 @@ async def call_tool(socket, service, name, arguments):
 def main():
     parser = service_args(__doc__, "tools.python")
     parser.add_argument("module", help="Python module file exporting a TOOLS mapping")
+    parser.add_argument(
+        "--staged", action="store_true", help="Wait for a separately probed activation"
+    )
     args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     try:
         service = load(args.module)
         asyncio.run(
-            serve(args.socket, args.name, args.replace, METHODS, service.handle)
+            serve(
+                args.socket,
+                args.name,
+                args.replace,
+                METHODS,
+                service.handle,
+                staged=args.staged,
+            )
         )
     except KeyboardInterrupt:
         return 130

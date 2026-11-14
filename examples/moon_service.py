@@ -48,8 +48,14 @@ async def handle(name, params, emit, stream):
 
 
 def main():
-    args = service_args(__doc__, NAME).parse_args()
-    asyncio.run(serve(args.socket, args.name, args.replace, METHODS, handle))
+    parser = service_args(__doc__, NAME)
+    parser.add_argument("--staged", action="store_true")
+    args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
+    asyncio.run(
+        serve(args.socket, args.name, args.replace, METHODS, handle, staged=args.staged)
+    )
 
 
 if __name__ == "__main__":

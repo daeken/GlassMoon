@@ -5,9 +5,11 @@ import asyncio
 import json
 import os
 import signal
+import uuid
 from pathlib import Path
 
 from .ipc import ProtocolError, RequestError, call, connect
+from .toolbox import call_tool
 
 
 async def probe(socket, service, method, params, expected, timeout=3):
@@ -143,14 +145,11 @@ class Supervisor:
                         if attempt < self.args.restarts
                         else "The restart budget is exhausted."
                     )
-                    noticing = asyncio.create_task(
-                        notify(
-                            self.args.socket,
-                            self.args.maintainer,
-                            f"GlassMoon incident for {self.args.service}: {reason}. {status} "
-                            f"Diagnose with the {self.args.probe} IPC probe and report the result.",
-                        )
+                    message = (
+                        f"GlassMoon incident for {self.args.service}: {reason}. {status} "
+                        f"Diagnose with the {self.args.probe} IPC probe and report the result."
                     )
+                    noticing = asyncio.create_task(self.notify(message))
                     notices.add(noticing)
                     noticing.add_done_callback(notices.discard)
                 if attempt < self.args.restarts:
@@ -165,6 +164,35 @@ class Supervisor:
             for task in notices:
                 task.cancel()
             await asyncio.gather(*notices, return_exceptions=True)
+
+    async def notify(self, message):
+        a = self.args
+        if not a.mailbox:
+            await notify(a.socket, a.maintainer, message)
+            return
+        fields = {
+            "sender": f"supervisor.{a.service}"[:96],
+            "agent": a.maintainer.removeprefix("agent."),
+            "key": uuid.uuid4().hex,
+            "task": message,
+        }
+        for attempt in range(3):
+            try:
+                async with asyncio.timeout(5):
+                    task = await call_tool(a.socket, a.mailbox, "submit", fields)
+                self.event("incident_queued", task=task["id"], agent=fields["agent"])
+                return
+            except (
+                RequestError,
+                ProtocolError,
+                EOFError,
+                OSError,
+                TimeoutError,
+            ) as error:
+                if attempt == 2:
+                    self.event("incident_publish_failed", error=type(error).__name__)
+                else:
+                    await asyncio.sleep(0.5)
 
 
 async def run(args):
@@ -189,6 +217,9 @@ def main():
     parser.add_argument("--params", type=json.loads, default={})
     parser.add_argument("--expect", type=json.loads, default={})
     parser.add_argument("--maintainer", help="Agent service to notify on failure")
+    parser.add_argument(
+        "--mailbox", help="Queue maintainer incidents in this task mailbox"
+    )
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--timeout", type=float, default=3)
