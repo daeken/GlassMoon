@@ -75,3 +75,24 @@ async def connect(path):
             await writer.wait_closed()
         except OSError:
             pass
+
+
+async def call(path, service, method, params, *, on_chunk=None, version=1):
+    """Call a service and await its final result, optionally handling chunks."""
+    async with connect(path) as wire:
+        await wire.send(
+            "call", id="call", service=service, method=method, params=params,
+            interface_version=version, stream=on_chunk is not None,
+        )
+        while True:
+            message = await wire.receive()
+            if message.get("id") != "call":
+                raise ProtocolError("Unexpected response ID")
+            if message["type"] == "chunk" and on_chunk is not None:
+                await on_chunk(message["data"])
+            elif message["type"] == "response":
+                if message["status"] == "error":
+                    raise RequestError(message["error"])
+                return message["result"]
+            else:
+                raise ProtocolError("Unexpected call response")

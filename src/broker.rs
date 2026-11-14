@@ -37,6 +37,14 @@ struct Call {
     client: PeerId,
     request_id: String,
     generation: PeerId,
+    stream: bool,
+}
+
+struct Invocation {
+    service: String,
+    interface_version: u32,
+    method: String,
+    params: Value,
 }
 
 pub struct Broker {
@@ -86,6 +94,9 @@ impl Broker {
             return;
         }
         match incoming {
+            Incoming::Completion(Completion::Chunk { call_id, data }) => {
+                self.chunk(peer, call_id, data);
+            }
             Incoming::Completion(Completion::Complete { call_id, outcome }) => {
                 self.complete(peer, call_id, outcome);
             }
@@ -141,8 +152,19 @@ impl Broker {
                 interface_version,
                 method,
                 params,
+                stream,
             } => {
-                self.call(peer, id, &service, interface_version, method, params);
+                self.call(
+                    peer,
+                    id,
+                    Invocation {
+                        service,
+                        interface_version,
+                        method,
+                        params,
+                    },
+                    stream,
+                );
             }
         }
     }
@@ -244,16 +266,14 @@ impl Broker {
         }
     }
 
-    fn call(
-        &mut self,
-        client: PeerId,
-        id: String,
-        name: &str,
-        version: u32,
-        method: String,
-        params: Value,
-    ) {
-        let Some(&generation) = self.active.get(name) else {
+    fn call(&mut self, client: PeerId, id: String, invocation: Invocation, stream: bool) {
+        let Invocation {
+            service: name,
+            interface_version: version,
+            method,
+            params,
+        } = invocation;
+        let Some(&generation) = self.active.get(&name) else {
             self.error(
                 client,
                 &id,
@@ -287,9 +307,12 @@ impl Broker {
         }
 
         let call_id = self.next_call;
-        let frame =
-            json!({ "type": "invoke", "call_id": call_id, "method": method, "params": params })
-                .to_string();
+        let mut frame =
+            json!({ "type": "invoke", "call_id": call_id, "method": method, "params": params });
+        if stream {
+            frame["stream"] = json!(true);
+        }
+        let frame = frame.to_string();
         if frame.len() > MAX_FRAME {
             self.error(
                 client,
@@ -321,8 +344,33 @@ impl Broker {
                 client,
                 request_id: id,
                 generation,
+                stream,
             },
         );
+    }
+
+    fn chunk(&mut self, peer: PeerId, call_id: u64, data: Value) {
+        let Some(call) = self.calls.get(&call_id) else {
+            return;
+        };
+        if call.generation != peer || !call.stream {
+            return;
+        }
+        let frame = json!({
+            "type": "chunk", "id": call.request_id, "generation": peer, "data": data,
+        })
+        .to_string();
+        if frame.len() > MAX_FRAME {
+            self.complete(
+                peer,
+                call_id,
+                Outcome::Error {
+                    error: RpcError::new("frame_too_large", "Stream chunk exceeds the frame limit"),
+                },
+            );
+            return;
+        }
+        self.send(call.client, frame);
     }
 
     fn complete(&mut self, peer: PeerId, call_id: u64, outcome: Outcome) {

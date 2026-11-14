@@ -15,6 +15,10 @@ pub enum Incoming {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Completion {
+    Chunk {
+        call_id: u64,
+        data: Value,
+    },
     Complete {
         call_id: u64,
         #[serde(flatten)]
@@ -52,6 +56,8 @@ pub enum Command {
         interface_version: u32,
         method: String,
         params: Value,
+        #[serde(default)]
+        stream: bool,
     },
 }
 
