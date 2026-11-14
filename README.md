@@ -19,6 +19,8 @@ Use `--restart-broker` with workers that support reconnecting. The launcher repl
 
 ## Chat with an agent
 
+To return to a stack that's still running, set `GLASSMOON_SOCKET` to its existing socket and open the terminal client with `uv run --locked python -m glassmoon.tui --socket "$GLASSMOON_SOCKET" --query moon`. Use `/handoff` to review recent work. Use `--resume` after a stack has stopped.
+
 Build the broker and install the Python dependencies. Choose a private socket directory and share the printed socket path across the terminals you use below.
 
 ```sh
