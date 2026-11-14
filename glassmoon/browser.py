@@ -76,15 +76,27 @@ SHARE = tool(
 
 
 def web_url(value):
-    url = urlsplit(value)
+    try:
+        url = urlsplit(value)
+        port = url.port
+    except ValueError as error:
+        raise fail("invalid_url", "Use an HTTP(S) URL with a valid host and port") from error
     if (
         url.scheme not in ("http", "https")
         or not url.hostname
-        or url.username
-        or url.password
+        or url.username is not None
+        or url.password is not None
+        or port == 0
     ):
         raise fail("invalid_url", "Use an HTTP(S) URL without embedded credentials")
     return value
+
+
+def origin(url, *, bare=False):
+    parts = urlsplit(web_url(url))
+    if bare and (parts.path not in ("", "/") or parts.query or parts.fragment):
+        raise ValueError("--allow-origin expects an origin such as http://127.0.0.1:8000")
+    return parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
 
 
 def image_result(data, width, height, **meta):
@@ -137,16 +149,58 @@ class Window:
 
 
 class Browser:
-    def __init__(self, engine, browser, max_windows=8, publish=None):
+    def __init__(self, engine, browser, max_windows=8, publish=None, allowed_origins=()):
         self.engine = engine
         self.browser = browser
         self.max_windows = max_windows
         self.publish = publish
+        self.allowed_origins = frozenset(origin(url, bare=True) for url in allowed_origins)
         self.windows = {}
         self.opening = asyncio.Lock()
 
+    def navigation_url(self, url):
+        url = web_url(url)
+        if self.allowed_origins and origin(url) not in self.allowed_origins:
+            raise fail("origin_blocked", "This browser worker does not allow that origin")
+        return url
+
+    async def route(self, route):
+        url = route.request.url
+        if url.startswith(("data:", "blob:")):
+            await route.continue_()
+            return
+        try:
+            self.navigation_url(url)
+        except RequestError:
+            await route.abort()
+            return
+        if not self.allowed_origins:
+            await route.continue_()
+            return
+        try:
+            response = await route.fetch(max_redirects=0, timeout=TIMEOUT)
+        except Error:
+            await route.abort()
+            return
+        try:
+            # Playwright only intercepts the first request of a redirect chain.
+            if 300 <= response.status < 400 and "location" in response.headers:
+                await route.abort()
+            else:
+                await route.fulfill(response=response)
+        finally:
+            await response.dispose()
+
+    async def close_websocket(self, websocket):
+        await websocket.close()
+
+    async def close_context(self, context):
+        if self.allowed_origins:
+            await context.unroute_all(behavior="ignoreErrors")
+        await context.close()
+
     async def open(self, args):
-        url = web_url(args["url"]) if args.get("url") else None
+        url = self.navigation_url(args["url"]) if args.get("url") else None
         async with self.opening:
             if len(self.windows) >= self.max_windows:
                 raise fail("window_limit", "Close a window before opening another")
@@ -158,16 +212,9 @@ class Browser:
             )
             try:
                 # HTTP and HTTPS cover normal pages, assets, and local dev servers.
-                await context.route(
-                    "**/*",
-                    lambda route: (
-                        route.continue_()
-                        if route.request.url.startswith(
-                            ("http://", "https://", "data:", "blob:")
-                        )
-                        else route.abort()
-                    ),
-                )
+                await context.route("**/*", self.route)
+                if self.allowed_origins:
+                    await context.route_web_socket("**/*", self.close_websocket)
                 page = await context.new_page()
                 window = Window(context, page)
                 window.listen()
@@ -176,7 +223,7 @@ class Browser:
                 if url:
                     await page.goto(url, wait_until="domcontentloaded")
             except BaseException:
-                await context.close()
+                await self.close_context(context)
                 raise
             handle = secrets.token_urlsafe(18)
             self.windows[handle] = window
@@ -205,7 +252,7 @@ class Browser:
                     if page.is_closed():
                         raise fail("unknown_window", "The browser window is closed")
                     if action == "close":
-                        await window.context.close()
+                        await self.close_context(window.context)
                         return {"closed": handle}
                     if action == "diagnostics":
                         return {"events": list(window.diagnostics)}
@@ -283,7 +330,7 @@ class Browser:
         match action:
             case "navigate":
                 response = await page.goto(
-                    web_url(args["url"]), wait_until="domcontentloaded"
+                    self.navigation_url(args["url"]), wait_until="domcontentloaded"
                 )
                 return {
                     "url": page.url,
@@ -384,6 +431,7 @@ async def run(args):
                 browser,
                 args.max_windows,
                 publish if args.evidence else None,
+                args.allow_origin,
             )
             tools = TOOLS | {"share": SHARE} if args.evidence else TOOLS
             service = ToolService(tools, worker.invoke)
@@ -408,6 +456,10 @@ def main():
         "--evidence",
         help="Enable explicit screenshot publication to the named evidence service",
     )
+    parser.add_argument(
+        "--allow-origin", action="append", default=[],
+        help="Limit browser HTTP requests to this origin. Repeat to allow multiple origins.",
+    )
     args = parser.parse_args()
     if not 1 <= args.max_windows <= 32:
         parser.error("--max-windows must be between 1 and 32")
@@ -415,7 +467,7 @@ def main():
         asyncio.run(run(args))
     except KeyboardInterrupt:
         return 130
-    except (RequestError, ProtocolError, EOFError, OSError, Error) as error:
+    except (RequestError, ProtocolError, EOFError, OSError, Error, ValueError) as error:
         parser.exit(1, f"{error}\n")
     return 0
 

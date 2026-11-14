@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import unittest
+from contextlib import suppress
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -40,8 +42,75 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                     backend = await driver.launch()
                     try:
                         await self.exercise_browser(Browser(engine, backend))
+                        await self.exercise_allowed_origins(engine, backend)
                     finally:
                         await backend.close()
+
+    async def exercise_allowed_origins(self, engine, backend):
+        unexpected = []
+
+        async def respond(reader, writer, handler):
+            try:
+                request = (await reader.readuntil(b"\r\n\r\n")).split()[1]
+                status, headers, body = handler(request)
+                writer.write(
+                    f"HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {len(body)}\r\n".encode()
+                    + headers + b"\r\n" + body
+                )
+                await writer.drain()
+            except (asyncio.IncompleteReadError, ConnectionError):
+                pass
+            finally:
+                writer.close()
+                with suppress(ConnectionError):
+                    await writer.wait_closed()
+
+        def forbidden(request):
+            unexpected.append(request)
+            return "200 OK", b"", b"unexpected"
+
+        def allowed(request):
+            if request == b"/jump":
+                return "302 Found", f"Location: {other}/trap\r\n".encode(), b""
+            if request == b"/same-origin-redirect":
+                return "302 Found", b"Location: /status\r\n", b""
+            if request == b"/status":
+                return "200 OK", b"", b"ready"
+            return "200 OK", b"Content-Type: text/html\r\n", PAGE.encode()
+
+        async def start(handler):
+            return await asyncio.start_server(
+                lambda reader, writer: respond(reader, writer, handler), "127.0.0.1", 0
+            )
+
+        async with await start(forbidden) as second, await start(allowed) as first:
+            other = f"http://127.0.0.1:{second.sockets[0].getsockname()[1]}"
+            site = f"http://127.0.0.1:{first.sockets[0].getsockname()[1]}"
+            worker = Browser(engine, backend, allowed_origins=[site])
+            window = await worker.invoke("open", {"url": site})
+            handle = {"window": window["window"]}
+            try:
+                self.assertEqual((await worker.invoke("inspect", handle))["title"], "Fixture")
+                status = await worker.invoke(
+                    "evaluate", handle | {"script": "() => fetch('/status').then(r => r.text())"}
+                )
+                self.assertEqual(status["result"], "ready")
+                blocked = await worker.invoke(
+                    "evaluate",
+                    handle | {
+                        "script": "async url => (await Promise.allSettled([fetch(url), fetch('/jump'), fetch('/same-origin-redirect')])).map(r => r.status)",
+                        "argument": other,
+                    },
+                )
+                self.assertEqual(blocked["result"], ["rejected"] * 3)
+                with self.assertRaises(RequestError) as direct:
+                    await worker.invoke("navigate", handle | {"url": other})
+                self.assertEqual(direct.exception.code, "origin_blocked")
+                with self.assertRaises(RequestError):
+                    await worker.invoke("navigate", handle | {"url": f"{site}/jump"})
+                self.assertEqual(unexpected, [])
+            finally:
+                await worker.invoke("close", handle)
 
     async def exercise_browser(self, worker):
         first = await worker.invoke("open", {})
