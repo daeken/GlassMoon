@@ -1,6 +1,7 @@
 """End-to-end regressions for routing across a live service replacement."""
 
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -23,6 +24,34 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class UpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_call_refuses_broker_without_feature(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(5):
+            folder = Path(stack.enter_context(TemporaryDirectory(prefix="gm-old-", dir="/tmp")))
+            socket = folder / "ipc"
+            received = []
+            done = asyncio.Event()
+
+            async def old_broker(reader, writer):
+                try:
+                    request = json.loads(await reader.readline())
+                    writer.write(json.dumps({
+                        "type": "response", "id": request["id"], "status": "ok",
+                        "result": {"protocol": 1},
+                    }).encode() + b"\n")
+                    await writer.drain()
+                    received.append(await reader.readline())
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+                    done.set()
+
+            await stack.enter_async_context(await asyncio.start_unix_server(old_broker, path=socket))
+            with self.assertRaises(RequestError) as error:
+                await call(socket, "echo", "echo", {"value": "staged only"}, generation=42)
+            self.assertEqual(error.exception.code, "unsupported_generation_calls")
+            await done.wait()
+            self.assertEqual(received, [b""])
+
     async def test_supervisor_preserves_worker_through_broker_outage(self):
         async with AsyncExitStack() as stack, asyncio.timeout(15):
             folder = Path(stack.enter_context(TemporaryDirectory(prefix="gm-supervise-", dir="/tmp")))

@@ -580,6 +580,7 @@ async def run(args):
             args.replace,
             METHODS,
             agent.handle,
+            staged=args.staged,
             reconnect=True,
             maintainer=args.maintainer,
         )
@@ -605,6 +606,7 @@ def main():
         help="Comma-separated allowed response modalities",
     )
     parser.add_argument("--min-context-tokens", type=int, default=1)
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     parser.add_argument(
         "--tool-service",
         action="append",
@@ -627,6 +629,8 @@ def main():
         args = parser.parse_args()
         if args.min_context_tokens < 1:
             parser.error("--min-context-tokens must be positive")
+        if args.staged and args.replace is not None:
+            parser.error("--staged and --replace cannot be used together")
         if args.python_eval and not args.workspace:
             parser.error("--python-eval requires --workspace")
         asyncio.run(run(args))

@@ -231,6 +231,10 @@ Add `--check-only` to run the probe while leaving the candidate staged. A later 
 
 Shared tool workers expose `health` with `status` and their tool count. Agents report their identity and saved conversation revision. These probes check basic worker readiness. Use a service-specific probe when release depends on a downstream dependency.
 
+An agent or browser can also start with `--staged`. For an agent replacement, use the same state path and probe its saved revision before activation. For a browser replacement, old windows close when the old worker retires.
+
+Generation-specific calls require a broker that advertises the `generation_calls` feature. Rebuild and restart an older broker before using staged release or generation-bound tool and provider calls.
+
 ### Supervise a local worker
 
 Moon wrote the `moon.text` example service, which fingerprints UTF-8 text and exposes a deterministic health probe. The supervisor starts a worker, validates probe fields, restarts it after repeated failures or process exit, and can send an incident to a named maintainer agent.

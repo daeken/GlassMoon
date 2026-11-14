@@ -511,6 +511,7 @@ async def run(args):
                 args.replace,
                 METHODS,
                 service.handle,
+                staged=args.staged,
                 reconnect=True,
                 maintainer=args.maintainer,
             )
@@ -531,7 +532,10 @@ def main():
         "--allow-origin", action="append", default=[],
         help="Limit browser HTTP requests to this origin. Repeat to allow multiple origins.",
     )
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     if not 1 <= args.max_windows <= 32:
         parser.error("--max-windows must be between 1 and 32")
     try:

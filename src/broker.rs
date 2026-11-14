@@ -116,7 +116,11 @@ impl Broker {
         if let Command::Hello { protocol } = request.command {
             if protocol == VERSION {
                 client.greeted = true;
-                self.ok(peer, &id, json!({ "protocol": VERSION }));
+                self.ok(
+                    peer,
+                    &id,
+                    json!({ "protocol": VERSION, "features": ["generation_calls"] }),
+                );
             } else {
                 self.error(
                     peer,

@@ -25,6 +25,7 @@ class Wire:
     def __init__(self, reader, writer):
         self.reader = reader
         self.writer = writer
+        self.features = ()
 
     async def send(self, kind, /, **fields):
         frame = json.dumps(
@@ -68,7 +69,8 @@ async def connect(path):
     reader, writer = await asyncio.open_unix_connection(path, limit=MAX_FRAME + 1)
     wire = Wire(reader, writer)
     try:
-        await wire.request("hello", "hello", protocol=PROTOCOL)
+        hello = await wire.request("hello", "hello", protocol=PROTOCOL)
+        wire.features = hello["result"].get("features", ())
         yield wire
     finally:
         writer.close()
@@ -84,6 +86,11 @@ async def call(
 ):
     """Call a service, optionally returning the response envelope with its generation."""
     async with connect(path) as wire:
+        if generation is not None and "generation_calls" not in wire.features:
+            raise RequestError({
+                "code": "unsupported_generation_calls",
+                "message": "Update the broker before sending generation-specific calls",
+            })
         await wire.send(
             "call",
             id="call",
