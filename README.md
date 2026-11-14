@@ -209,6 +209,8 @@ To check browser integration locally, run `uv run --locked python -m unittest di
 
 The example Python tool `examples/browser_note_tools.py` converts note text into a batch for that fixture. Publish it with `glassmoon.toolbox` and pass the returned steps to the browser's `actions` tool when you want to run the batch. If a batch fails after attempting a click or keypress, its `activation_attempted` flag stays true. Verify any resulting effect before replaying the batch.
 
+Run `uv run --locked python -m examples.browser_demo --engine chromium` for a standalone fixture run. It serves a disposable local page, runs the recipe, prints the exact checked text, and closes the page and server. Use `--engine webkit` to exercise the other engine.
+
 ### Share a browser screenshot between agents
 
 Start a local visual evidence service with its own SQLite file. Pass `--evidence tools.evidence` when launching a browser worker, and add `--tool-service tools.evidence` to the receiving agent.
