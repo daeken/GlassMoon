@@ -23,6 +23,10 @@ TOOLS = {
         {"metadata": OBJECT},
     ),
     "read": tool("Read a shared reproduction summary.", {"owner": TEXT, "key": TEXT}),
+    "list": tool(
+        "List references and screenshot digests for an owner, with no image payloads.",
+        {"owner": TEXT}, {"after": TEXT},
+    ),
     "image": tool(
         "Read the explicitly shared screenshot for this evidence.",
         {"owner": TEXT, "key": TEXT},
@@ -94,6 +98,8 @@ class Evidence:
             """)
 
     def request(self, name, args):
+        if name == "list":
+            return self.list(args["owner"], args.get("after", ""))
         owner, key = args["owner"], args["key"]
         if not identifier(owner) or not identifier(key):
             raise fail("invalid_evidence_key", "Use a simple owner and key")
@@ -166,6 +172,21 @@ class Evidence:
                     )
                 result["image"] = image
             return result
+
+    def list(self, owner, after):
+        if not identifier(owner) or (after != "" and not identifier(after)):
+            raise fail("invalid_evidence_key", "Use a simple owner and cursor")
+        with closing(sqlite3.connect(self.path, timeout=3)) as db:
+            rows = db.execute(
+                """SELECT e.key, i.digest FROM evidence e
+                   LEFT JOIN evidence_image i ON i.owner=e.owner AND i.key=e.key
+                   WHERE e.owner=? AND e.key>? ORDER BY e.key LIMIT 21""",
+                (owner, after),
+            ).fetchall()
+        return {
+            "items": [{"key": key, "image_sha256": digest} for key, digest in rows[:20]],
+            "next": rows[19][0] if len(rows) > 20 else None,
+        }
 
     async def invoke(self, name, args):
         return await asyncio.to_thread(self.request, name, args)

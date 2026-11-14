@@ -178,7 +178,7 @@ uv run --locked python -m glassmoon.evidence --socket "$GLASSMOON_SOCKET" --stat
 
 The browser's `share` tool publishes a screenshot with an owner, key, and reproduction summary. It includes the viewport dimensions, engine, and counts of diagnostic categories. Share the owner and key in the mailbox task. The recipient can read the summary and explicitly request the image. The image call verifies the stored SHA-256 digest. Review what is visible before choosing to share, since the screenshot includes page content.
 
-Use `/evidence OWNER KEY` in the TUI to inspect the reproduction summary and metadata. `/save-image OWNER KEY PATH` checks the digest and creates a new local file with owner-only permissions. Choose an unused destination.
+Use `/evidence OWNER` to find published keys and `/evidence OWNER KEY` to inspect a reproduction summary and its metadata. `/save-image OWNER KEY PATH` checks the digest and creates a new local file with owner-only permissions. Choose an unused destination.
 
 ### Attach the macOS desktop
 

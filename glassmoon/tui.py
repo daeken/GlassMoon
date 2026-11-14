@@ -405,8 +405,25 @@ class Terminal:
 
     async def show_evidence(self, argument):
         parts = argument.split()
+        if len(parts) in (1, 3):
+            if len(parts) == 3 and parts[1] != "after":
+                self.log("status", "Usage /evidence OWNER [KEY | after KEY]")
+                return
+            owner = parts[0]
+            params = {"owner": owner}
+            if len(parts) == 3:
+                params["after"] = parts[2]
+            page = await call_tool(self.socket, self.evidence, "list", params)
+            for item in page["items"]:
+                image = "  [screenshot]" if item["image_sha256"] else ""
+                self.log("status", f"{owner}/{item['key']}{image}")
+            if not page["items"]:
+                self.log("status", "No evidence on this page.")
+            if page["next"] is not None:
+                self.log("status", f"Use /evidence {owner} after {page['next']} for more.")
+            return
         if len(parts) != 2:
-            self.log("status", "Usage /evidence OWNER KEY")
+            self.log("status", "Usage /evidence OWNER [KEY | after KEY]")
             return
         owner, key = parts
         evidence = await call_tool(self.socket, self.evidence, "read", {"owner": owner, "key": key})
@@ -526,7 +543,7 @@ class Terminal:
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
                     self.log(self.active, "/save-image OWNER KEY PATH saves a shared screenshot")
-                    self.log(self.active, "/evidence OWNER KEY shows a shared observation")
+                    self.log(self.active, "/evidence OWNER [KEY] lists or shows shared observations")
                     self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
                     self.log(self.active, "/more-tasks pages through your last task list")
