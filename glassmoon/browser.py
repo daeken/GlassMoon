@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from time import monotonic
 from urllib.parse import urlsplit
 
-from playwright.async_api import Error, async_playwright
+from playwright.async_api import Error, async_playwright, expect
 from playwright.async_api import TimeoutError as BrowserTimeout
 
 from .ipc import ProtocolError, RequestError
@@ -65,9 +65,12 @@ TOOLS = {
         {"argument": {}},
     ),
     "wait_for": tool(
-        "Wait for a CSS selector to become visible and optionally contain matching text.",
+        "Wait for a CSS selector to become visible and optionally match text.",
         WINDOW | {"selector": TEXT},
-        {"text": TEXT, "timeout_ms": INTEGER},
+        {
+            "text": TEXT, "timeout_ms": INTEGER,
+            "exact": {"type": "boolean", "description": "Require the complete visible text to match exactly."},
+        },
     ),
     "screenshot": tool(
         "See an image of this window's browser viewport. Coordinates are CSS pixels.",
@@ -418,12 +421,22 @@ class Browser:
                         "invalid_timeout",
                         "Use a timeout between 1 and 20000 milliseconds",
                     )
+                exact = args.get("exact", False)
+                if type(exact) is not bool or (exact and not isinstance(args.get("text"), str)):
+                    raise fail("invalid_text", "Exact matching requires a text string")
                 locator = page.locator(selector)
-                if "text" in args:
-                    locator = locator.filter(has_text=args["text"])
                 try:
+                    if exact:
+                        expected = args["text"]
+                        pattern = re.compile(r"^" + re.escape(expected) + r"$(?![\s\S])")
+                        async with asyncio.timeout(timeout / 1000):
+                            await expect(locator).to_have_text(pattern, use_inner_text=True, timeout=timeout)
+                            await self.check_visible_text(locator, expected)
+                        return {"visible": True, "text": expected}
+                    if "text" in args:
+                        locator = locator.filter(has_text=args["text"])
                     await locator.first.wait_for(state="visible", timeout=timeout)
-                except BrowserTimeout:
+                except (BrowserTimeout, AssertionError, TimeoutError):
                     raise fail(
                         "browser_timeout",
                         f"Visible selector condition unmet after {timeout} ms",
@@ -522,6 +535,7 @@ class Browser:
             return {
                 "completed": completed,
                 "error": "action_failed",
+                "failed_step": completed + 1,
                 "reason": reason,
                 "action": action,
                 "url": page.url,

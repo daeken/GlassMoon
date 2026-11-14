@@ -255,6 +255,13 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         save = a | {"action": "click", "by": "role", "role": "button", "name": "Save"}
         await worker.invoke("element", save)
         await worker.invoke("wait_for", a | {"selector": "#status", "text": "semantic check"})
+        exact = await worker.invoke("wait_for", a | {"selector": "#status", "text": "semantic check", "exact": True})
+        self.assertEqual(exact, {"visible": True, "text": "semantic check"})
+        partial = await worker.invoke("actions", a | {"steps": [
+            {"action": "element", "operation": "click", "by": "role", "role": "button", "name": "Save"},
+            {"action": "wait_for", "selector": "#status", "text": "semantic", "exact": True, "timeout_ms": 100},
+        ]})
+        self.assertEqual((partial["completed"], partial["failed_step"], partial["reason"]), (1, 2, "browser_timeout"))
         await worker.invoke(
             "evaluate", a | {"script": "() => document.body.insertAdjacentHTML('beforeend', '<button>Save</button>')"}
         )
