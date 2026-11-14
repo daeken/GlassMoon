@@ -266,7 +266,7 @@ class Terminal:
             for item in result["matches"]
         ]
         if not entries:
-            entries.append("No matching messages.")
+            entries.append("No matches in this part of the transcript." if result["before"] else "No matching messages.")
         if result["before"] is not None:
             entries.append("Use /find again for earlier matches.")
         self.search_page[window] = (query, result["before"], entries)

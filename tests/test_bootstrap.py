@@ -268,6 +268,20 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             matches = first["matches"] + older["matches"]
             self.assertEqual([row["position"] for row in matches], list(reversed(range(24))))
             self.assertTrue(all("Straße" in row["snippet"] for row in matches))
+            self.assertIsNone(older["before"])
+
+    def test_history_query_pages_past_an_empty_block(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            store.create(identifier="moon")
+            store.append("moon", 0, {"role": "user", "content": "remember me"},
+                         *([{"role": "assistant", "content": "other"}] * 1000))
+            first = store.find_history("moon", "remember")
+            self.assertEqual(first, {"matches": [], "before": 1})
+            older = store.find_history("moon", "remember", first["before"])
+            self.assertEqual([row["position"] for row in older["matches"]], [0])
+            self.assertIsNone(older["before"])
 
     async def test_tool_policy_rolls_back_and_survives_replacement(self):
         with tempfile.TemporaryDirectory() as folder:

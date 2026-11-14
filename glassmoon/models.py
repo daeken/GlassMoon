@@ -314,13 +314,17 @@ class Transcripts:
         revision = self.revision(identifier)
         end = revision if before is None else min(revision, before)
         rows = self.db.execute(
-            "SELECT position, value FROM messages WHERE conversation=? AND position<? ORDER BY position DESC LIMIT 1000",
+            """SELECT position, value FROM messages
+               WHERE conversation=? AND position<? ORDER BY position DESC LIMIT 1001""",
             (identifier, end),
         )
         result = []
         cursor = None
         needle = query.casefold()
-        for position, value in rows:
+        for scanned, (position, value) in enumerate(rows):
+            if scanned == 1000:
+                cursor = position + 1
+                break
             item = json.loads(value)
             text = result_text(item["content"])
             index = text.casefold().find(needle)
@@ -338,8 +342,8 @@ class Transcripts:
                 if encoded_size(snippet) > 2500:
                     snippet = snippet[:340]
                 result.append({"position": position, "role": item["role"], "snippet": snippet})
-            cursor = position or None
             if len(result) == 20:
+                cursor = position or None
                 break
         return {"matches": result, "before": cursor}
 
