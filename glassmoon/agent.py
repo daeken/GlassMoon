@@ -457,20 +457,21 @@ class Agent:
         requirements = self.requirements if requirements is None else requirements
 
         async def generate(messages):
-            return await call(
-                self.socket,
-                self.router,
-                "generate",
-                {
-                    **{
-                        key: requirements[key]
-                        for key in ("provider", "model")
-                        if key in requirements
+            async with asyncio.timeout(90):
+                return await call(
+                    self.socket,
+                    self.router,
+                    "generate",
+                    {
+                        **{
+                            key: requirements[key]
+                            for key in ("provider", "model")
+                            if key in requirements
+                        },
+                        "messages": messages,
+                        "output_modalities": ["text"],
                     },
-                    "messages": messages,
-                    "output_modalities": ["text"],
-                },
-            )
+                )
 
         return await compaction.compact(
             self.transcripts,
@@ -600,7 +601,7 @@ class Agent:
             revision, _, summary, history = snapshot
             try:
                 _, summary, history = await self.compact(snapshot, requirements=requirements)
-            except (RequestError, ProtocolError, EOFError, OSError):
+            except (RequestError, ProtocolError, EOFError, OSError, TimeoutError):
                 if stream:
                     await emit(
                         {

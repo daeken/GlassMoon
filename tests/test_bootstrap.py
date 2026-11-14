@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 from mcp import StdioServerParameters
 
 from glassmoon.agent import Agent
-from glassmoon.compaction import compactable_turn
+from glassmoon.compaction import compact, compactable_turn
 from glassmoon.ipc import RequestError
 from glassmoon.mcp_bridge import Bridge
 from glassmoon.models import Transcripts
@@ -39,6 +39,24 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_compaction_retries_oversized_reply_with_shorter_prompt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            store.create(identifier="moon")
+            turn = ({"role": "user", "content": "Question"}, {"role": "assistant", "content": "Answer"})
+            store.append("moon", 0, *(turn * 3))
+            prompts = []
+
+            async def generate(messages):
+                prompts.append(messages[-1]["content"])
+                return {"message": {"content": "x" * 6000 if len(prompts) == 1 else "Short summary"}}
+
+            through, summary, remaining = await compact(store, "moon", *store.context("moon"), generate, force=True)
+            self.assertEqual((through, summary, len(remaining)), (2, "Short summary", 4))
+            self.assertIn("300 words or fewer", prompts[-1])
+            self.assertEqual(len(store.history("moon")["messages"]), 6)
+
     async def test_mcp_health_reports_upstream_catalog_changes_without_swapping_tools(self):
         bridge = Bridge("fixture")
         published = {"removed": {}, "changed": {"description": "old"}, "same": {}}
