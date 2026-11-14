@@ -41,6 +41,19 @@ TOOLS = {
         "Use the revision returned by read_file.",
         {"path": TEXT, "old": TEXT, "new": TEXT, "revision": TEXT},
     ),
+    "edit_file_batch": method(
+        "Replace several exact strings in one file at the given SHA-256 revision. All edits must match before anything is written.",
+        {
+            "path": TEXT, "revision": TEXT,
+            "edits": {
+                "type": "array", "minItems": 1, "maxItems": 8,
+                "items": {
+                    "type": "object", "properties": {"old": TEXT, "new": TEXT},
+                    "required": ["old", "new"], "additionalProperties": False,
+                },
+            },
+        },
+    ),
     "python_eval": method(
         "Evaluate a raw Python expression or execute Python statements in a fresh process. "
         "Print values to return them when running statements. The current directory is the workspace.",
@@ -171,11 +184,27 @@ class Workspace:
         text, current, mode = self.read(path)
         if current != revision:
             raise fail("revision_changed", "The file changed. Read it before editing.")
-        if name == "edit_file":
-            old = params["old"]
-            if not old or text.count(old) != 1:
-                raise fail("edit_conflict", "The old text must occur exactly once")
-            text = text.replace(old, params["new"], 1)
+        if name in ("edit_file", "edit_file_batch"):
+            edits = (
+                params["edits"] if name == "edit_file_batch"
+                else [{"old": params["old"], "new": params["new"]}]
+            )
+            if not 1 <= len(edits) <= 8:
+                raise fail("invalid_arguments", "Supply one to eight edits")
+            for index, edit in enumerate(edits, start=1):
+                if (
+                    not isinstance(edit, dict) or set(edit) != {"old", "new"}
+                    or not all(isinstance(value, str) for value in edit.values())
+                ):
+                    raise fail("invalid_arguments", "Every edit needs old and new text")
+                old = edit["old"]
+                if not old or text.count(old) != 1:
+                    message = (
+                        "The old text must occur exactly once" if name == "edit_file"
+                        else f"Old text for edit {index} must occur exactly once"
+                    )
+                    raise fail("edit_conflict", message)
+                text = text.replace(old, edit["new"], 1)
         else:
             text = params["text"]
         data = text.encode()
@@ -271,8 +300,9 @@ class Workspace:
                 <= params.keys()
                 <= schema["properties"].keys()
                 or any(
-                    type(value)
-                    is not (int if schema["properties"][key] == INTEGER else str)
+                    type(value) is not {
+                        "integer": int, "string": str, "array": list,
+                    }[schema["properties"][key]["type"]]
                     for key, value in params.items()
                 )
             ):

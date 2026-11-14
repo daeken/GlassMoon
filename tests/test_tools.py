@@ -33,6 +33,25 @@ def sse(*items):
 
 
 class ToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_workspace_batch_edit_rolls_back_failed_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory, "note.txt")
+            file.write_text("first\nsecond\n")
+            workspace = Workspace(directory)
+            read = await workspace.execute(tool("read_file", path="note.txt"))
+            fields = {"path": "note.txt", "revision": read["revision"]}
+            first = {"old": "first", "new": "one"}
+            failed = await workspace.execute(tool(
+                "edit_file_batch", **fields, edits=[first, {"old": "absent", "new": "two"}],
+            ))
+            self.assertEqual(failed["error"], "edit_conflict")
+            self.assertEqual(file.read_text(), "first\nsecond\n")
+            edited = await workspace.execute(tool(
+                "edit_file_batch", **fields, edits=[first, {"old": "second", "new": "two"}],
+            ))
+            self.assertIn("revision", edited)
+            self.assertEqual(file.read_text(), "one\ntwo\n")
+
     async def test_workspace_edits_check_revisions_and_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
