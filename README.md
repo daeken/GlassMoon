@@ -17,6 +17,8 @@ The launcher checks registration and configured readiness probes, logs each chil
 
 Use `--restart-broker` with workers that support reconnecting. The launcher replaces the broker once after an exit and waits for its workers to register and pass their readiness probes.
 
+Pass `--status` with the same manifest and state directory to inspect the running broker without starting a second stack. The JSON snapshot lists registered generations and any manifest services without an active worker.
+
 To run the dispatcher alongside a persistent stack, add a top-level `dispatcher` command to the manifest. The launcher starts it after the worker readiness checks and saves its output in `dispatcher.log`. The smoke run checks readiness and exits before dispatching tasks.
 
 ```toml

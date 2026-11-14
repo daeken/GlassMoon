@@ -63,6 +63,16 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
                 async with asyncio.timeout(12):
                     ready = json.loads(await process.stdout.readline())
                     socket_path = ready["socket"]
+                    status = await asyncio.create_subprocess_exec(
+                        sys.executable, "-m", "glassmoon.stack", "examples/offline-stack.toml",
+                        "--state", Path(root) / "state", "--status", stdout=asyncio.subprocess.PIPE,
+                    )
+                    status_output, _ = await status.communicate()
+                    self.assertEqual(status.returncode, 0)
+                    snapshot = json.loads(status_output)
+                    self.assertEqual(snapshot["socket"], socket_path)
+                    self.assertEqual(snapshot["missing"], [])
+                    self.assertEqual(len(snapshot["services"]), 4)
                     await call(socket_path, "agent.moon", "chat", {"text": "Before broker exit"})
                     os.kill(ready["broker_pid"], signal.SIGKILL)
                     exited = json.loads(await process.stdout.readline())

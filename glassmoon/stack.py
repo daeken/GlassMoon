@@ -93,6 +93,14 @@ class Stack:
             "python": sys.executable,
         }
 
+    async def status(self):
+        async with asyncio.timeout(self.timeout):
+            async with connect(self.socket) as wire:
+                snapshot = (await wire.request("list", "stack-status"))["result"]["services"]
+        service_names = {row["name"] for row in snapshot if row["state"] == "active"}
+        expected = [worker.get("service", worker["name"]) for worker in self.config.get("worker", [])]
+        return {"socket": str(self.socket), "services": snapshot, "missing": sorted(set(expected) - service_names)}
+
     @contextmanager
     def state_lock(self):
         if not self.resume:
@@ -310,6 +318,7 @@ def main():
         action="store_true",
         help="Exit successfully after all readiness checks",
     )
+    parser.add_argument("--status", action="store_true", help="Read the running broker's registration snapshot")
     parser.add_argument(
         "--resume", action="store_true", help="Resume a previously created stack directory"
     )
@@ -319,11 +328,18 @@ def main():
     args = parser.parse_args()
     if not 0.1 <= args.timeout <= 120:
         parser.error("--timeout must be between 0.1 and 120 seconds")
+    if args.status and (args.smoke or args.resume or args.restart_broker):
+        parser.error("--status cannot be combined with launch options")
     try:
         config = manifest(args.manifest)
+        stack = Stack(config, args.root.resolve(), args.state.resolve(), args.timeout, args.resume)
+        if args.status:
+            status = asyncio.run(stack.status())
+            print(json.dumps(status, ensure_ascii=False), flush=True)
+            return int(bool(status["missing"]))
         return asyncio.run(
             run(
-                Stack(config, args.root.resolve(), args.state.resolve(), args.timeout, args.resume),
+                stack,
                 args.smoke,
                 restart_broker=args.restart_broker,
             )
@@ -335,8 +351,12 @@ def main():
         ValueError,
         RuntimeError,
         TimeoutError,
+        ProtocolError,
+        RequestError,
+        EOFError,
     ) as error:
-        parser.exit(1, f"Stack did not start: {error or type(error).__name__}\n")
+        context = "Could not read stack status" if args.status else "Stack did not start"
+        parser.exit(1, f"{context}: {error or type(error).__name__}\n")
 
 
 if __name__ == "__main__":
