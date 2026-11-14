@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -83,11 +84,11 @@ class Evidence:
         self.path = Path(path).expanduser()
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path.touch(mode=0o600, exist_ok=True)
-        with closing(sqlite3.connect(self.path)) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS evidence (
                     owner TEXT NOT NULL, key TEXT NOT NULL, summary TEXT NOT NULL,
-                    metadata TEXT NOT NULL, PRIMARY KEY(owner, key)
+                    metadata TEXT NOT NULL, published_at REAL, PRIMARY KEY(owner, key)
                 )
             """)
             db.execute("""
@@ -96,6 +97,9 @@ class Evidence:
                     digest TEXT NOT NULL, PRIMARY KEY(owner, key)
                 )
             """)
+            db.execute("BEGIN IMMEDIATE")
+            if "published_at" not in {column[1] for column in db.execute("PRAGMA table_info(evidence)")}:
+                db.execute("ALTER TABLE evidence ADD COLUMN published_at REAL")
 
     def request(self, name, args):
         if name == "list":
@@ -122,8 +126,8 @@ class Evidence:
                 image = args.get("image")
                 digest = screenshot_digest(image) if image is not None else None
                 inserted = db.execute(
-                    "INSERT OR IGNORE INTO evidence VALUES (?, ?, ?, ?)",
-                    (owner, key, summary, payload),
+                    "INSERT OR IGNORE INTO evidence(owner, key, summary, metadata, published_at) VALUES (?, ?, ?, ?, ?)",
+                    (owner, key, summary, payload, time.time()),
                 ).rowcount
                 if inserted and image is not None:
                     db.execute(
@@ -131,14 +135,14 @@ class Evidence:
                         (owner, key, image["url"], digest),
                     )
             row = db.execute(
-                "SELECT summary, metadata FROM evidence WHERE owner=? AND key=?",
+                "SELECT summary, metadata, published_at FROM evidence WHERE owner=? AND key=?",
                 (owner, key),
             ).fetchone()
             if row is None:
                 raise fail(
                     "evidence_missing", "No evidence was published under that key"
                 )
-            if name == "publish" and row != (summary, payload):
+            if name == "publish" and row[:2] != (summary, payload):
                 raise fail(
                     "evidence_conflict", "This key already contains different evidence"
                 )
@@ -160,6 +164,7 @@ class Evidence:
                 "key": key,
                 "summary": row[0],
                 "metadata": json.loads(row[1]),
+                "published_at": row[2],
                 "image_sha256": stored[1] if stored else None,
             }
             if name == "image":

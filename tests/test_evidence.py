@@ -32,6 +32,7 @@ class EvidenceTests(unittest.TestCase):
             saved = worker.request("publish", publish | {"image": jpeg(content)})
             self.assertEqual(saved["image_sha256"], hashlib.sha256(content).hexdigest())
             self.assertNotIn("image", worker.request("read", ref))
+            self.assertGreater(saved["published_at"], 0)
             self.assertEqual(
                 worker.request("list", {"owner": "moon"}),
                 {"items": [{"key": "review", "image_sha256": saved["image_sha256"]}], "next": None},
@@ -66,6 +67,16 @@ class EvidenceTests(unittest.TestCase):
             expected = [{"key": f"item-{index:02}", "image_sha256": None} for index in range(25)]
             self.assertEqual(first["items"] + second["items"], expected)
             self.assertIsNone(second["next"])
+
+    def test_older_evidence_keeps_unknown_publication_time(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "legacy.db"
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute("CREATE TABLE evidence (owner TEXT, key TEXT, summary TEXT, metadata TEXT, PRIMARY KEY(owner, key))")
+                db.execute("INSERT INTO evidence VALUES ('moon', 'old', 'legacy observation', '{}')")
+            stored = Evidence(path).request("read", {"owner": "moon", "key": "old"})
+            self.assertEqual(stored["summary"], "legacy observation")
+            self.assertIsNone(stored["published_at"])
 
 
 class ExportTests(unittest.IsolatedAsyncioTestCase):

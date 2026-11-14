@@ -471,6 +471,9 @@ class Terminal:
         owner, key = parts
         evidence = await call_tool(self.socket, self.evidence, "read", {"owner": owner, "key": key})
         self.log("status", f"Evidence {owner}/{key}")
+        if evidence.get("published_at") is not None:
+            when = datetime.fromtimestamp(evidence["published_at"]).strftime("%b %d %H:%M:%S")
+            self.log("status", f"Published {when} local time")
         self.log("status", evidence["summary"])
         if evidence["metadata"]:
             self.log("status", json.dumps(evidence["metadata"], ensure_ascii=False, indent=2))
