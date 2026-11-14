@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 from glassmoon.agent import Agent
 from glassmoon.echo import METHODS
-from glassmoon.ipc import RequestError, call, connect
+from glassmoon.ipc import ProtocolError, RequestError, call, connect
 from glassmoon.models import Transcripts
 from glassmoon.release import release
 from glassmoon.service import serve
@@ -51,6 +51,31 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.code, "unsupported_generation_calls")
             await done.wait()
             self.assertEqual(received, [b""])
+
+    async def test_exact_call_rejects_a_mismatched_reply(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(5):
+            folder = Path(stack.enter_context(TemporaryDirectory(prefix="gm-origin-", dir="/tmp")))
+            socket = folder / "ipc"
+
+            async def wrong_route(reader, writer):
+                try:
+                    for generation, result in (
+                        (None, {"protocol": 1, "features": ["generation_calls"]}),
+                        (41, {"value": "wrong worker"}),
+                    ):
+                        request = json.loads(await reader.readline())
+                        message = {"type": "response", "id": request["id"], "status": "ok", "result": result}
+                        if generation is not None:
+                            message["generation"] = generation
+                        writer.write(json.dumps(message).encode() + b"\n")
+                        await writer.drain()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            await stack.enter_async_context(await asyncio.start_unix_server(wrong_route, path=socket))
+            with self.assertRaises(ProtocolError):
+                await call(socket, "echo", "echo", {"value": "staged only"}, generation=42)
 
     async def test_supervisor_preserves_worker_through_broker_outage(self):
         async with AsyncExitStack() as stack, asyncio.timeout(15):

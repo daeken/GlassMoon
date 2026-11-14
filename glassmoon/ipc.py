@@ -106,12 +106,16 @@ async def call(
             if message.get("id") != "call":
                 raise ProtocolError("Unexpected response ID")
             if message["type"] == "chunk" and on_chunk is not None:
+                if generation is not None and message.get("generation") != generation:
+                    raise ProtocolError("Stream chunk came from an unexpected generation")
                 await on_chunk(message["data"])
             elif message["type"] == "response":
                 if message["status"] == "error":
                     raise RequestError(
                         message["error"], generation=message.get("generation")
                     )
+                if generation is not None and message.get("generation") != generation:
+                    raise ProtocolError("Call response came from an unexpected generation")
                 return message if envelope else message["result"]
             else:
                 raise ProtocolError("Unexpected call response")
