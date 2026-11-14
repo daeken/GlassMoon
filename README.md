@@ -127,6 +127,8 @@ When a provider asks an agent to use tools, the continuation goes back to the sa
 
 Agent state keeps the full transcript in SQLite and a separate summary of older complete turns. Agents compact automatically when their unsummarized transcript grows. Use `/compact` in an agent chat or the `compact` RPC to request it explicitly. Use `info` to inspect the covered revision.
 
+If a model returns an oversized summary, compaction tries once more with a shorter prompt. `/memory` shows the last accepted summary and `/find` can search the original messages for exact details.
+
 ```sh
 uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call agent.moon compact
 ```

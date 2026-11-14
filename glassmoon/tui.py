@@ -318,6 +318,7 @@ class Terminal:
             self.dirty = True
 
     async def compact(self, window):
+        self.log(window, "Compacting older turns…")
         result = await call(self.socket, f"agent.{window}", "compact", {})
         text = (
             f"Compacted through revision {result['through_revision']}."
