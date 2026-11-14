@@ -18,7 +18,12 @@ TOOLS = {
     "submit": tool(
         "Queue a task for an agent. Retries using the same sender and key return the original task.",
         {"sender": TEXT, "agent": TEXT, "key": TEXT, "task": TEXT},
-        {"recovery_check": TEXT, "parent": TEXT},
+        {
+            "recovery_check": TEXT | {
+                "description": "Optional check to perform after interruption. Leave empty if there is no check.",
+            },
+            "parent": TEXT | {"description": "ID of the task that delegated this work, if any."},
+        },
     ),
     "list_tasks": tool(
         "List tasks newest first. Optionally filter by agent, status or cursor.",
@@ -192,8 +197,12 @@ class Mailbox:
             for name, value in (("sender", sender), ("agent", agent), ("key", key))
         )
         task = content(task, "task", 4000)
+        if isinstance(recovery_check, str) and not recovery_check.strip():
+            recovery_check = None
         if recovery_check is not None:
             recovery_check = content(recovery_check, "recovery check", 1200)
+        if isinstance(parent, str) and not parent.strip():
+            parent = None
         if parent is not None:
             parent = label(parent, "parent task")
             if not db.execute("SELECT 1 FROM tasks WHERE id=?", (parent,)).fetchone():

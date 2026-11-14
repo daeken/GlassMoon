@@ -413,6 +413,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
 
     def test_delegated_tasks_link_to_a_real_parent(self):
         parent = self.rpc("submit", **TASK)
+        self.assertEqual(self.rpc("submit", **TASK, parent="", recovery_check=" "), parent)
         other = self.rpc("submit", **(TASK | {"key": "other"}))
         args = TASK | {"sender": "tide", "agent": "finch", "key": "child"}
         with self.assertRaises(RequestError) as rejected:
