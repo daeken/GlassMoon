@@ -288,12 +288,38 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             row = await dispatcher.deliver()
         self.assertEqual((row["status"], row["result"]), ("review", "Tool effects need review"))
         worker = MailboxService(self.box, "socket")
+        with patch("glassmoon.mailbox.call", AsyncMock(return_value={"status": "done", "reply": reply})):
+            self.assertEqual(await worker.reconcile(task["id"]), row)
+
+    async def test_dispatcher_recovers_late_partial_receipt_without_resolving_review(self):
+        task = self.rpc("submit", **TASK)
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+        reply = {"message": {"content": "Check whether the note was saved"}, "outcome": "review"}
+
+        async def agent(*_args, **_options):
+            self.now += 31
+            return reply
+
+        async def route(method, fields):
+            if method == "reconcile":
+                worker = MailboxService(self.box, "socket")
+                with patch("glassmoon.mailbox.call", AsyncMock(return_value={"status": "done", "reply": reply})):
+                    recovered = await worker.reconcile(fields["id"], fields["attempt"])
+                    self.assertEqual(await worker.reconcile(fields["id"], fields["attempt"]), recovered)
+                    return recovered
+            return self.rpc(method, **fields)
+
         with (
-            patch("glassmoon.mailbox.call", AsyncMock(return_value={"status": "done", "reply": reply})),
-            self.assertRaises(RequestError) as rejected,
+            patch.object(dispatcher, "online", AsyncMock(return_value=True)),
+            patch.object(dispatcher, "rpc", side_effect=route),
+            patch("glassmoon.dispatcher.call", AsyncMock(side_effect=agent)) as run_task,
         ):
-            await worker.reconcile(task["id"])
-        self.assertEqual(rejected.exception.code, "receipt_needs_review")
+            recovered = await dispatcher.deliver()
+        run_task.assert_awaited_once()
+        self.assertEqual((recovered["status"], recovered["attempts"]), ("review", 1))
+        self.assertEqual(recovered["result"], reply["message"]["content"])
+        timeline = self.rpc("timeline", id=task["id"])["events"]
+        self.assertEqual([event["kind"] for event in timeline[:2]], ["partial_receipt_recovered", "lease_expired"])
 
     async def test_tool_progress_records_metadata_and_survives_review(self):
         task = self.rpc("submit", **TASK)

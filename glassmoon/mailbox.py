@@ -44,7 +44,7 @@ TOOLS = {
         {"id": TEXT, "action": TEXT, "note": TEXT, "expected_revision": INTEGER},
     ),
     "reconcile": tool(
-        "Recover a completed agent receipt for a task awaiting review",
+        "Recover a saved agent reply for a task awaiting review",
         {"id": TEXT}, {"attempt": INTEGER},
     ),
 }
@@ -455,26 +455,30 @@ class Mailbox:
         }[action])
         return self.get(db, now, id)
 
-    def record_receipt(self, db, now, id, expected_revision, attempt, result):
+    def record_receipt(self, db, now, id, expected_revision, attempt, result, needs_review):
         result = content(result, "result", 12000)
+        status = "review" if needs_review else "done"
+        note = (
+            "Recovered a partial agent reply. Verify effects before retrying."
+            if needs_review else "Recovered from the saved agent receipt."
+        )
         changed = db.execute(
             """
-            UPDATE tasks SET status='done', result=?, revision=revision+1,
-                             review_note='Recovered from the saved agent receipt.', updated_at=?
+            UPDATE tasks SET status=?, result=?, revision=revision+1, review_note=?, updated_at=?
             WHERE id=? AND status='review' AND revision=? AND attempts=?
         """,
-            (result, now, id, expected_revision, attempt),
+            (status, result, note, now, id, expected_revision, attempt),
         ).rowcount
         if not changed:
             raise fail(
                 "revision_conflict", "Task state changed while checking its receipt"
             )
-        self.event(db, now, id, attempt, "receipt_recovered")
+        self.event(db, now, id, attempt, "partial_receipt_recovered" if needs_review else "receipt_recovered")
         return self.get(db, now, id)
 
-    def settle_receipt(self, identifier, revision, attempt, result):
+    def settle_receipt(self, identifier, revision, attempt, result, needs_review=False):
         with self.transaction() as (db, now):
-            return self.record_receipt(db, now, identifier, revision, attempt, result)
+            return self.record_receipt(db, now, identifier, revision, attempt, result, needs_review)
 
 
 class MailboxService(ToolService):
@@ -513,18 +517,21 @@ class MailboxService(ToolService):
                 "receipt_incomplete",
                 "No completed receipt for this attempt. Verify its effects.",
             )
-        if receipt["reply"].get("outcome") == "review":
-            raise fail("receipt_needs_review", "The saved reply asks you to verify task effects")
+        needs_review = receipt["reply"].get("outcome") == "review"
         result = (
             result_text(receipt["reply"]["message"]["content"]).strip()
             or "Agent returned an empty reply."
         )
+        result = result.encode()[:12000].decode(errors="ignore")
+        if needs_review and task["result"] == result:
+            return task
         return await asyncio.to_thread(
             self.mailbox.settle_receipt,
             identifier,
             task["revision"],
             task["attempts"],
-            result.encode()[:12000].decode(errors="ignore"),
+            result,
+            needs_review,
         )
 
     async def handle(self, name, params, emit, stream):

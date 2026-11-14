@@ -450,6 +450,7 @@ class Terminal:
             "cancelled": "Operator cancelled task",
             "verified": "Operator recorded verification",
             "receipt_recovered": "Recovered agent reply from receipt",
+            "partial_receipt_recovered": "Recovered partial agent reply, outcome needs review",
         }
         for event in reversed(page["events"]):
             when = datetime.fromtimestamp(event["observed_at"]).strftime("%b %d %H:%M:%S")

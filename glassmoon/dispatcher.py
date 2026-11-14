@@ -173,7 +173,7 @@ class Dispatch:
                     completed = await self.rpc("finish", finish)
                     break
                 except RequestError as error:
-                    if error.code != "stale_lease" or status != "done":
+                    if error.code != "stale_lease" or reply is None:
                         raise
                     completed = await self.rpc(
                         "reconcile", {"id": task["id"], "attempt": task["attempts"]}
