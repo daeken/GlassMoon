@@ -46,6 +46,7 @@ PYTHON = """
 import ast
 import sys
 
+sys.path.insert(0, sys.argv[1])
 source = sys.stdin.read()
 scope = {"__name__": "__main__"}
 try:
@@ -60,10 +61,11 @@ else:
 
 
 class Workspace:
-    def __init__(self, root, python=False):
+    def __init__(self, root, python=False, socket=None):
         self.root = Path(root).expanduser().resolve(strict=True)
         if not self.root.is_dir():
             raise ValueError("The workspace must be a directory")
+        self.socket = socket
         self.names = [name for name in TOOLS if name != "python_eval" or python]
         self.definitions = [
             {
@@ -162,12 +164,15 @@ class Workspace:
             for key in ("PATH", "LANG", "LC_ALL")
             if key in os.environ
         }
+        if self.socket is not None:
+            environment["GLASSMOON_SOCKET"] = str(self.socket)
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-I",
             "-u",
             "-c",
             PYTHON,
+            str(Path(__file__).resolve().parent.parent),
             cwd=self.root,
             env=environment,
             start_new_session=True,

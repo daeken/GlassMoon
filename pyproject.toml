@@ -3,4 +3,9 @@ name = "glassmoon"
 version = "0.1.0"
 description = "A local agentic coding harness"
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.28,<1", "PyJWT[crypto]>=2.10,<3"]
+dependencies = [
+    "httpx>=0.28,<1",
+    "httpx2>=2,<3",
+    "mcp>=2.3,<3",
+    "PyJWT[crypto]>=2.10,<3",
+]

@@ -150,6 +150,10 @@ class Transcripts:
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY, model TEXT, revision INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS compactions (
+                conversation TEXT PRIMARY KEY REFERENCES conversations(id),
+                through_revision INTEGER NOT NULL, summary TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS messages (
                 conversation TEXT NOT NULL REFERENCES conversations(id),
                 position INTEGER NOT NULL, value TEXT NOT NULL,
@@ -196,6 +200,40 @@ class Transcripts:
             revision,
             [json.loads(row[2]) for row in rows if row[2] is not None],
         )
+
+    def context(self, identifier):
+        snapshot = self.db.execute(
+            """SELECT c.revision, COALESCE(k.through_revision, 0), COALESCE(k.summary, ''), m.value
+               FROM conversations c
+               LEFT JOIN compactions k ON k.conversation = c.id
+               LEFT JOIN messages m ON m.conversation = c.id AND m.position >= COALESCE(k.through_revision, 0)
+               WHERE c.id = ? ORDER BY m.position""",
+            (identifier,),
+        ).fetchall()
+        if not snapshot:
+            raise fail("unknown_conversation", "Conversation does not exist")
+        revision, through, summary, _ = snapshot[0]
+        return (
+            revision,
+            through,
+            summary,
+            [json.loads(row[3]) for row in snapshot if row[3] is not None],
+        )
+
+    def compact(self, identifier, revision, previous, through, summary):
+        with self.db:
+            changed = self.db.execute(
+                """INSERT INTO compactions (conversation, through_revision, summary)
+                   SELECT id, ?, ? FROM conversations WHERE id = ? AND revision = ?
+                   ON CONFLICT(conversation) DO UPDATE SET
+                       through_revision = excluded.through_revision, summary = excluded.summary
+                   WHERE compactions.through_revision = ?""",
+                (through, summary, identifier, revision, previous),
+            ).rowcount
+            if not changed:
+                raise fail(
+                    "conversation_changed", "Conversation changed during compaction"
+                )
 
     def history(self, identifier, before=None):
         model, revision, messages = self.read(identifier)

@@ -140,6 +140,8 @@ class Terminal:
                     value["text"]
                 )
                 self.dirty = True
+            elif value["type"] == "status":
+                self.log(window, value["message"])
             elif value["type"] == "tool" and value["phase"] != "finished":
                 self.log(window, f"* {value['name']} {value['phase']}")
 

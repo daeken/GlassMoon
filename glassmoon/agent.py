@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from . import functions
+from . import compaction, functions
 from .ipc import ProtocolError, RequestError, call
 from .models import (
     INTEGER,
@@ -18,10 +18,12 @@ from .models import (
     within_reply_limit,
 )
 from .service import fail, method, serve, service_args
+from .toolbox import call_tool, list_tools, validate_name
 from .workspace_tools import Workspace
 
 METHODS = {
     "info": method("Show agent identity and model settings"),
+    "compact": method("Summarize older complete turns into durable context"),
     "history": method(
         "Read a page of agent chat history", optional={"before": INTEGER}
     ),
@@ -38,12 +40,13 @@ MAX_TOOL_ROUNDS = 6
 MAX_TOOL_CALLS = 16
 
 
-def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET):
+def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET, summary=""):
     developer = {
         "role": "developer",
         "content": [{"type": "text", "text": instructions}],
     }
-    size = encoded_size([developer, user])
+    base = [developer, compaction.context_summary(summary)] if summary else [developer]
+    size = encoded_size([*base, user])
     if size > budget:
         raise fail(
             "message_too_large",
@@ -58,7 +61,7 @@ def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET):
             break
         size += turn_size
         start -= 2
-    return [developer, *history[start:], user]
+    return [*base, *history[start:], user]
 
 
 class Agent:
@@ -71,6 +74,7 @@ class Agent:
         instructions,
         transcripts,
         workspace=None,
+        tool_services=(),
     ):
         self.socket = socket
         self.identity = identity
@@ -80,21 +84,79 @@ class Agent:
         self.transcripts = transcripts
         self.conversation = transcripts.create(identifier=identity)
         self.workspace = workspace
+        self.tool_services = tuple(dict.fromkeys(tool_services))
 
-    async def generate(self, history, user, emit, stream):
-        workspace = self.workspace
+    async def discover_tools(self, emit, stream):
+        definitions = list(self.workspace.definitions) if self.workspace else []
+        routes = {}
+        for service in self.tool_services:
+            try:
+                async with asyncio.timeout(5):
+                    remote = await list_tools(self.socket, service)
+                for tool in functions.definitions({"tools": remote}):
+                    name = validate_name(f"{service.replace('.', '_')}__{tool['name']}")
+                    if name in routes or any(
+                        item["name"] == name for item in definitions
+                    ):
+                        raise fail(
+                            "duplicate_tool", f"Tool {name} is already available"
+                        )
+                    routes[name] = (service, tool["name"])
+                    definitions.append(tool | {"name": name})
+            except (
+                RequestError,
+                ProtocolError,
+                EOFError,
+                OSError,
+                TimeoutError,
+                KeyError,
+                TypeError,
+            ):
+                if stream:
+                    await emit(
+                        {
+                            "type": "status",
+                            "message": f"Tool service {service} unavailable or invalid.",
+                        }
+                    )
+        return functions.definitions({"tools": definitions}), routes
+
+    async def execute(self, item, routes):
+        if item["name"] in routes:
+            service, name = routes[item["name"]]
+            try:
+                return {
+                    "value": await call_tool(
+                        self.socket, service, name, json.loads(item["arguments"])
+                    )
+                }
+            except RequestError as error:
+                return {"error": error.code, "message": str(error)}
+            except (ProtocolError, OSError, EOFError, ValueError):
+                return {"error": "tool_failed", "message": f"Could not call {service}"}
+        if self.workspace:
+            return await self.workspace.execute(item)
+        return {
+            "error": "unknown_tool",
+            "message": "This agent has no tool by that name",
+        }
+
+    async def generate(self, history, user, emit, stream, summary=""):
+        definitions, routes = await self.discover_tools(emit, stream)
         requirements = self.requirements.copy()
         rounds = []
         used_ids = set()
         for _ in range(MAX_TOOL_ROUNDS + 1):
             params = dict(requirements)
             budget = TRANSCRIPT_BUDGET
-            if workspace is not None:
-                params["tools"] = workspace.definitions
+            if definitions:
+                params["tools"] = definitions
                 if rounds:
                     params["tool_history"] = rounds
                 budget = TOOL_BUDGET - encoded_size(params)
-            params["messages"] = turn_messages(self.instructions, history, user, budget)
+            params["messages"] = turn_messages(
+                self.instructions, history, user, budget, summary
+            )
             try:
                 reply = await call(
                     self.socket,
@@ -110,7 +172,7 @@ class Agent:
             announced = functions.calls(reply.get("tool_calls", []))
             if not announced:
                 return reply
-            if workspace is None:
+            if not definitions:
                 raise fail("tools_disabled", "This agent has no workspace tools")
             if (
                 len(rounds) >= MAX_TOOL_ROUNDS
@@ -137,7 +199,7 @@ class Agent:
                     await emit(
                         {"type": "tool", "name": item["name"], "phase": "started"}
                     )
-                result = await workspace.execute(item)
+                result = await self.execute(item, routes)
                 exchange["outputs"][item["id"]] = json.dumps(result, ensure_ascii=False)
                 if stream:
                     await emit(
@@ -151,6 +213,36 @@ class Agent:
                     )
         raise AssertionError("Tool loop exhausted")
 
+    async def compact(self, snapshot, force=False):
+        revision, through, summary, history = snapshot
+
+        async def generate(messages):
+            return await call(
+                self.socket,
+                self.router,
+                "generate",
+                {
+                    **{
+                        key: self.requirements[key]
+                        for key in ("provider", "model")
+                        if key in self.requirements
+                    },
+                    "messages": messages,
+                    "output_modalities": ["text"],
+                },
+            )
+
+        return await compaction.compact(
+            self.transcripts,
+            self.conversation,
+            revision,
+            through,
+            summary,
+            history,
+            generate,
+            force=force,
+        )
+
     async def handle(self, name, params, emit, stream):
         if name == "info":
             return {
@@ -158,9 +250,20 @@ class Agent:
                 "service": self.router,
                 "requirements": self.requirements,
                 "tools": self.workspace.names if self.workspace else [],
+                "tool_services": list(self.tool_services),
+                "compacted_through": self.transcripts.context(self.conversation)[1],
             }
         if name == "history":
             return self.transcripts.history(self.conversation, params.get("before"))
+        if name == "compact":
+            with self.transcripts.agent_turn():
+                snapshot = self.transcripts.context(self.conversation)
+                through, summary, _ = await self.compact(snapshot, force=True)
+                return {
+                    "through_revision": through,
+                    "summary": summary,
+                    "changed": through != snapshot[1],
+                }
         if name != "chat":
             raise fail("unknown_method", "Unknown agent method")
         if (
@@ -177,8 +280,19 @@ class Agent:
             )
         within_reply_limit(user)
         with self.transcripts.agent_turn():
-            _, revision, history = self.transcripts.read(self.conversation)
-            reply = await self.generate(history, user, emit, stream)
+            snapshot = self.transcripts.context(self.conversation)
+            revision, _, summary, history = snapshot
+            try:
+                _, summary, history = await self.compact(snapshot)
+            except (RequestError, ProtocolError, EOFError, OSError):
+                if stream:
+                    await emit(
+                        {
+                            "type": "status",
+                            "message": "Compaction failed. Using the last saved context.",
+                        }
+                    )
+            reply = await self.generate(history, user, emit, stream, summary)
             assistant = message(reply["message"])
             result = within_reply_limit(
                 {"agent": self.identity, "revision": revision + 2, **reply}
@@ -215,9 +329,10 @@ async def run(args):
             requirements,
             args.instructions,
             transcripts,
-            Workspace(args.workspace, python=args.python_eval)
+            Workspace(args.workspace, python=args.python_eval, socket=args.socket)
             if args.workspace
             else None,
+            args.tool_service,
         )
         await serve(
             args.socket, f"agent.{identity}", args.replace, METHODS, agent.handle
@@ -244,6 +359,12 @@ def main():
         help="Comma-separated allowed response modalities",
     )
     parser.add_argument("--min-context-tokens", type=int, default=1)
+    parser.add_argument(
+        "--tool-service",
+        action="append",
+        default=[],
+        help="Discover and call tools from a named broker service",
+    )
     parser.add_argument(
         "--workspace", help="Directory where the agent can read and edit files"
     )
