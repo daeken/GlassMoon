@@ -54,6 +54,8 @@ class Router:
                     generation=service["generation"],
                 )
             entries = [capabilities(model) for model in result["models"]]
+            if len({entry["id"] for entry in entries}) != len(entries):
+                return [], provider
         except (
             RequestError,
             ProtocolError,

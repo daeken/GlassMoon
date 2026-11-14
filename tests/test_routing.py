@@ -16,6 +16,18 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class RoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_catalog_rejects_ambiguous_model_ids_within_one_provider(self):
+        router = Router("unused")
+        service = {"name": "fixture", "generation": 11, "interface_version": 1}
+        model = {
+            "id": "model", "input_modalities": ["text"], "output_modalities": ["text"],
+            "context_tokens": 1000, "streaming": True,
+        }
+        with patch("glassmoon.provider_router.call", AsyncMock(return_value={"models": [
+            model, model | {"input_modalities": ["text", "image"]},
+        ]})):
+            self.assertEqual(await router.catalog(service), ([], "fixture"))
+
     async def test_provider_generation_change_rejects_continuation(self):
         router = Router("unused")
         active = {
