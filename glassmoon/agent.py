@@ -43,6 +43,7 @@ METHODS = {
     "history": method(
         "Read a page of agent chat history", optional={"before": INTEGER}
     ),
+    "find_history": method("Search saved transcript text", {"query": TEXT}, {"before": INTEGER}),
     "chat": method(
         "Send text or a multimodal user message to the agent",
         optional={"text": TEXT, "message": MESSAGE},
@@ -514,6 +515,8 @@ class Agent:
             return self.transcripts.memory(self.conversation)
         if name == "history":
             return self.transcripts.history(self.conversation, params.get("before"))
+        if name == "find_history":
+            return self.transcripts.find_history(self.conversation, params["query"], params.get("before"))
         if name == "compact":
             with self.transcripts.agent_turn():
                 snapshot = self.transcripts.context(self.conversation)

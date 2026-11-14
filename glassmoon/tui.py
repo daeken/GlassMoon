@@ -46,6 +46,7 @@ class Terminal:
         self.history_before = {}
         self.latest_before = {}
         self.history_page = {}
+        self.search_page = {}
         self.command_history = []
         self.history_index = 0
         self.task_page = None
@@ -185,6 +186,35 @@ class Terminal:
                 self.scroll = 0
                 self.scroll_to_top = False
             self.dirty = True
+
+    async def find_history(self, window, query):
+        async with self.history_loading.setdefault(window, asyncio.Lock()):
+            await self.load_matches(window, query)
+
+    async def load_matches(self, window, query):
+        if query:
+            before = None
+        else:
+            saved = self.search_page.get(window)
+            if not saved or saved[1] is None:
+                self.log(window, "No earlier search page. Use /find TEXT to start a search.")
+                return
+            query, before = saved
+        params = {"query": query}
+        if before is not None:
+            params["before"] = before
+        result = await call(self.socket, f"agent.{window}", "find_history", params)
+        self.search_page[window] = (query, result["before"])
+        self.history_page.pop(window, None)
+        if self.active == window:
+            self.scroll = 0
+            self.scroll_to_top = False
+        for item in result["matches"]:
+            self.log(window, f"{item['position'] + 1}  {item['role']}  {item['snippet']}")
+        if not result["matches"]:
+            self.log(window, "No matching messages on this page.")
+        if result["before"] is not None:
+            self.log(window, "Use /find again for earlier matches.")
 
     async def list_models(self):
         result = await call(self.socket, "models", "models", {})
@@ -631,6 +661,7 @@ class Terminal:
                     self.log(self.active, "/model [auto|default|PROVIDER[/MODEL]] in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                     self.log(self.active, "/memory shows the saved conversation summary")
+                    self.log(self.active, "/find TEXT searches saved messages. /find pages earlier.")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -645,6 +676,9 @@ class Terminal:
                 case "/older" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.older_history(window), window)
+                case "/find" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.find_history(window, argument), window)
                 case "/latest" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.latest_history(window), window)

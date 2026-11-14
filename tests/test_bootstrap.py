@@ -206,6 +206,21 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 fetched = page["messages"] + fetched
             self.assertEqual(fetched, messages)
 
+    def test_history_query_finds_compacted_and_uncompacted_messages(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            store.create(identifier="moon")
+            messages = [{"role": "user", "content": f"Item {index} Straße"} for index in range(24)]
+            store.append("moon", 0, *messages)
+            store.compact("moon", 24, 0, 20, "Older messages summarized")
+            first = store.find_history("moon", "STRASSE")
+            self.assertEqual(len(first["matches"]), 20)
+            older = store.find_history("moon", "STRASSE", first["before"])
+            matches = first["matches"] + older["matches"]
+            self.assertEqual([row["position"] for row in matches], list(reversed(range(24))))
+            self.assertTrue(all("Straße" in row["snippet"] for row in matches))
+
     async def test_tool_policy_rolls_back_and_survives_replacement(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder, "agent.db")

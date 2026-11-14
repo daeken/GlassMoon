@@ -306,6 +306,43 @@ class Transcripts:
             "before": end - len(page) or None,
         }
 
+    def find_history(self, identifier, query, before=None):
+        if not isinstance(query, str) or not query.strip() or len(query) > 200:
+            raise fail("invalid_query", "Use a search phrase of up to 200 characters")
+        if before is not None and (type(before) is not int or before < 1):
+            raise fail("invalid_cursor", "Use the previous search page's cursor")
+        revision = self.revision(identifier)
+        end = revision if before is None else min(revision, before)
+        rows = self.db.execute(
+            "SELECT position, value FROM messages WHERE conversation=? AND position<? ORDER BY position DESC LIMIT 1000",
+            (identifier, end),
+        )
+        result = []
+        cursor = None
+        needle = query.casefold()
+        for position, value in rows:
+            item = json.loads(value)
+            text = result_text(item["content"])
+            index = text.casefold().find(needle)
+            if index >= 0:
+                if not text.isascii():
+                    # Unicode folding can expand characters, so map the match back to the display text.
+                    offset = 0
+                    for original, char in enumerate(text):
+                        offset += len(char.casefold())
+                        if offset > index:
+                            index = original
+                            break
+                start = max(0, index - 80)
+                snippet = text[start:index + len(query) + 80]
+                if encoded_size(snippet) > 2500:
+                    snippet = snippet[:340]
+                result.append({"position": position, "role": item["role"], "snippet": snippet})
+            cursor = position or None
+            if len(result) == 20:
+                break
+        return {"matches": result, "before": cursor}
+
     def task_receipt(self, identifier, task_id, attempt):
         row = self.db.execute(
             "SELECT digest, reply FROM task_receipts WHERE conversation=? AND task_id=? AND attempt=?",

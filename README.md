@@ -45,6 +45,8 @@ Each agent saves its transcript in a local SQLite database keyed by name. `--sta
 
 Use `/older` in an agent's TUI window to page backward through its saved conversation. `/latest` returns to the live chat. `/memory` shows the saved summary and the most recent revision it covers.
 
+Use `/find TEXT` to search saved messages, including those already summarized. Run `/find` again to see earlier matches.
+
 ### Use your ChatGPT plan
 
 Run the sign-in command and approve GlassMoon in your browser with an eligible account. The worker reads and refreshes its OAuth credentials from an owner-only local profile. `--profile` selects a different file when passed to both commands. [OpenAI's ChatGPT plan integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
