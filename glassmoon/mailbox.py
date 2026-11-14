@@ -24,6 +24,14 @@ TOOLS = {
                 "description": "Optional check to perform after interruption. Leave empty if there is no check.",
             },
             "parent": TEXT | {"description": "ID of the task that delegated this work, if any."},
+            "evidence": {
+                "type": "array", "maxItems": 6,
+                "description": "Published references to include when first delivering this task.",
+                "items": {
+                    "type": "object", "properties": {"owner": TEXT, "key": TEXT},
+                    "required": ["owner", "key"], "additionalProperties": False,
+                },
+            },
         },
     ),
     "list_tasks": tool(
@@ -143,7 +151,8 @@ class Mailbox:
                 CREATE INDEX IF NOT EXISTS task_history ON task_events(task_id, seq);
                 CREATE TABLE IF NOT EXISTS task_evidence (
                     task_id TEXT NOT NULL REFERENCES tasks(id), owner TEXT NOT NULL,
-                    key TEXT NOT NULL, attempt INTEGER, PRIMARY KEY(task_id, owner, key)
+                    key TEXT NOT NULL, attempt INTEGER, at_submission INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(task_id, owner, key)
                 );
             """)
             db.execute("BEGIN IMMEDIATE")
@@ -157,6 +166,8 @@ class Mailbox:
             evidence_fields = {field[1] for field in db.execute("PRAGMA table_info(task_evidence)")}
             if "attempt" not in evidence_fields:
                 db.execute("ALTER TABLE task_evidence ADD COLUMN attempt INTEGER")
+            if "at_submission" not in evidence_fields:
+                db.execute("ALTER TABLE task_evidence ADD COLUMN at_submission INTEGER NOT NULL DEFAULT 0")
             db.execute("CREATE INDEX IF NOT EXISTS task_children ON tasks(parent, seq)")
 
     @contextmanager
@@ -223,6 +234,9 @@ class Mailbox:
         }
 
     def attach_evidence(self, db, now, id, owner, key, attempt=None):
+        return self.link_evidence(db, now, id, owner, key, attempt)
+
+    def link_evidence(self, db, now, id, owner, key, attempt=None, *, at_submission=False):
         if not evidence_identifier(owner) or not evidence_identifier(key):
             raise fail("invalid_evidence_key", "Use a simple owner and key")
         row = db.execute("SELECT attempts FROM tasks WHERE id=?", (id,)).fetchone()
@@ -238,7 +252,10 @@ class Mailbox:
             count = db.execute("SELECT COUNT(*) FROM task_evidence WHERE task_id=?", (id,)).fetchone()[0]
             if count >= 12:
                 raise fail("evidence_limit", "A task can link at most 12 evidence references")
-            db.execute("INSERT INTO task_evidence VALUES (?, ?, ?, ?)", (*fields, attempt))
+            db.execute(
+                "INSERT INTO task_evidence(task_id, owner, key, attempt, at_submission) VALUES (?, ?, ?, ?, ?)",
+                (*fields, attempt, at_submission),
+            )
             self.event(db, now, id, attempt or 0, "evidence_attached", f"{owner}/{key}")
         elif attempt is None:
             attempt = previous["attempt"]
@@ -249,7 +266,7 @@ class Mailbox:
             result["attempt"] = attempt
         return result
 
-    def submit(self, db, now, sender, agent, key, task, recovery_check=None, parent=None):
+    def submit(self, db, now, sender, agent, key, task, recovery_check=None, parent=None, evidence=None):
         sender, agent, key = (
             label(value, name)
             for name, value in (("sender", sender), ("agent", agent), ("key", key))
@@ -265,13 +282,29 @@ class Mailbox:
             parent = label(parent, "parent task")
             if not db.execute("SELECT 1 FROM tasks WHERE id=?", (parent,)).fetchone():
                 raise fail("unknown_parent", "The parent task does not exist")
+        references = set()
+        if evidence is not None:
+            if not isinstance(evidence, list) or len(evidence) > 6:
+                raise fail("invalid_evidence", "Supply up to six evidence references")
+            for entry in evidence:
+                if (
+                    not isinstance(entry, dict) or entry.keys() != {"owner", "key"}
+                    or not evidence_identifier(entry["owner"]) or not evidence_identifier(entry["key"])
+                ):
+                    raise fail("invalid_evidence", "Each evidence reference needs an owner and key")
+                references.add((entry["owner"], entry["key"]))
         row = db.execute(
             "SELECT * FROM tasks WHERE sender=? AND key=?", (sender, key)
         ).fetchone()
         if row:
+            original_references = {
+                tuple(ref) for ref in db.execute(
+                    "SELECT owner, key FROM task_evidence WHERE task_id=? AND at_submission=1", (row["id"],)
+                )
+            }
             if (row["agent"], row["task"], row["recovery_check"], row["parent"]) != (
                 agent, task, recovery_check, parent,
-            ):
+            ) or original_references != references:
                 raise fail(
                     "key_conflict",
                     "This sender and key already identify a different task",
@@ -286,6 +319,8 @@ class Mailbox:
             (identifier, sender, agent, key, task, recovery_check, parent, now, now),
         )
         self.event(db, now, identifier, 0, "submitted")
+        for owner, evidence_key in sorted(references):
+            self.link_evidence(db, now, identifier, owner, evidence_key, at_submission=True)
         return self.get(db, now, identifier)
 
     def get(self, db, _now, id):

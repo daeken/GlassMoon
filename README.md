@@ -262,6 +262,8 @@ Use `/watch-task ID` to follow a task as it runs. The watch reconnects after a b
 
 An agent can set `parent` to the current task ID when it submits a handoff. `/children ID` lists those related tasks, and a child's `/task ID` view shows its parent. Each task retains its own reply and review state.
 
+Include an `evidence` list of `{owner, key}` references in `submit` when the recipient needs the references in its first delivery. The mailbox records them in the same transaction as the task. Repeated submissions use the same reference set.
+
 When linking evidence with `attach_evidence`, include the attempt number if known. `/task ID` and `/timeline ID` then identify which attempt produced the observation even after a retry.
 
 Use `/review` for tasks that need a decision. `/review PARENT` shows only the children of that task that are awaiting review. `/more-tasks` pages backward through your last task list with its filters intact.

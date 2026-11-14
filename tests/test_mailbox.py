@@ -684,6 +684,23 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event["kind"] for event in events], ["evidence_attached", "submitted"])
         self.assertEqual(events[0]["name"], "moon/screenshot")
 
+    def test_submitted_evidence_is_available_at_first_claim_and_part_of_dedupe(self):
+        references = [{"owner": "moon", "key": "first"}, {"owner": "moon", "key": "second"}]
+        task = self.rpc("submit", **TASK, evidence=references)
+        self.assertEqual(task["evidence"], references)
+        self.assertEqual(self.rpc("submit", **TASK, evidence=references[::-1]), task)
+        rejected = TASK | {"key": "invalid"}
+        with self.assertRaises(RequestError):
+            self.rpc("submit", **rejected, evidence=[references[0], {"owner": ["bad"], "key": "second"}])
+        self.assertEqual([row["id"] for row in self.rpc("list_tasks")["tasks"]], [task["id"]])
+        lease = self.rpc("claim", agent="tide", lease_seconds=3)
+        self.assertEqual(lease["task"]["evidence"], references)
+        self.rpc("attach_evidence", id=task["id"], owner="moon", key="third", attempt=1)
+        self.assertEqual(self.rpc("submit", **TASK, evidence=references)["id"], task["id"])
+        with self.assertRaises(RequestError) as conflict:
+            self.rpc("submit", **TASK, evidence=references[:1])
+        self.assertEqual(conflict.exception.code, "key_conflict")
+
     def test_evidence_can_name_the_attempt_that_produced_it(self):
         task = self.rpc("submit", **TASK)
         self.rpc("claim", agent="tide", lease_seconds=1)
