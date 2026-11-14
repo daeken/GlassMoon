@@ -458,6 +458,8 @@ class Terminal:
                 detail += " · recovery check saved"
             if task["has_evidence"]:
                 detail += " · evidence linked"
+            if task.get("last_tool") and task["status"] in ("running", "review"):
+                detail += f" · {task['last_tool']} {task['last_tool_phase']}"
             self.log("status", detail)
             if excerpt := task.get("result_excerpt"):
                 suffix = "…" if task["result_excerpt_truncated"] else ""

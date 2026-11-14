@@ -500,6 +500,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         review, running = report["tasks"]
         self.assertEqual((review["id"], review["status"], review["has_recovery_check"]), (interrupted["id"], "review", 1))
         self.assertEqual((running["id"], running["status"], running["last_activity"]), (active["id"], "running", 103))
+        self.assertEqual((running["last_tool"], running["last_tool_phase"]), ("fixture", "started"))
         self.assertEqual(running["lease_until"], 120)
         self.assertFalse(report["more"])
         self.assertTrue(self.rpc("handoff", limit=1)["more"])

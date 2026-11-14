@@ -425,8 +425,14 @@ class Mailbox:
                    recovery_check IS NOT NULL AS has_recovery_check,
                    COALESCE((SELECT observed_at FROM task_events WHERE task_id=tasks.id
                              ORDER BY seq DESC LIMIT 1), updated_at) AS last_activity,
+                   latest_progress.name AS last_tool, latest_progress.phase AS last_tool_phase,
                    {COMPLETION_SQL}
-            FROM tasks WHERE status IN ('running','review','queued','done')
+            FROM tasks LEFT JOIN task_progress AS latest_progress
+              ON latest_progress.task_id=tasks.id AND latest_progress.attempt=tasks.attempts
+             AND latest_progress.event_index=(
+                SELECT MAX(event_index) FROM task_progress WHERE task_id=tasks.id AND attempt=tasks.attempts
+             )
+            WHERE status IN ('running','review','queued','done')
             ORDER BY CASE status WHEN 'review' THEN 0 WHEN 'running' THEN 1
                                 WHEN 'queued' THEN 2 ELSE 3 END,
                      last_activity DESC, seq DESC
