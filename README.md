@@ -79,7 +79,7 @@ Run either or both in separate terminals. The router discovers them as `deepseek
 
 ### Give an agent workspace tools
 
-Start the agent with `--workspace` to let it read, create, and edit UTF-8 files in that directory. Add `--python-eval` to let it run raw Python expressions and statements. Keep the same name and state path and pass `--replace GENERATION` if the agent is already running.
+Start the agent with `--workspace` to let it browse directories and read, create, and edit UTF-8 files in that directory. `list_files` accepts `.` for the root and returns pages of visible directory entries. Add `--python-eval` to let it run raw Python expressions and statements. Keep the same name and state path and pass `--replace GENERATION` if the agent is already running.
 
 ```sh
 uv run --locked python -m glassmoon.agent --socket "$GLASSMOON_SOCKET" \

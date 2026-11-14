@@ -68,6 +68,19 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("error", edited)
 
             (root / "link").symlink_to(target)
+            (root / "nested").mkdir()
+            (root / ".hidden").write_text("fixture")
+            for index in range(31):
+                (root / f"item-{index:02}.txt").touch()
+            page = await workspace.execute(tool("list_files", path="."))
+            second = await workspace.execute(tool("list_files", path=".", after=page["next"]))
+            names = {entry["name"]: entry["kind"] for entry in page["entries"] + second["entries"]}
+            self.assertEqual(len(names), 34)
+            self.assertEqual(names["nested"], "directory")
+            self.assertEqual(names["link"], "symlink")
+            self.assertNotIn(".hidden", names)
+            self.assertIsNone(second["next"])
+            self.assertEqual((await workspace.execute(tool("list_files", path="link")))["error"], "invalid_path")
             for path in ("link", "../note.txt", str(target)):
                 result = await workspace.execute(tool("read_file", path=path))
                 self.assertEqual(result["error"], "invalid_path")

@@ -3,6 +3,7 @@
 import asyncio
 import fcntl
 import hashlib
+import heapq
 import json
 import os
 import signal
@@ -20,6 +21,11 @@ OUTPUT_LIMIT = 4000
 EVAL_TIMEOUT = 15
 
 TOOLS = {
+    "list_files": method(
+        "List one workspace directory or a page of its entries. Use . for the workspace root.",
+        {"path": TEXT},
+        {"after": TEXT},
+    ),
     "read_file": method(
         "Read a slice of a UTF-8 workspace file and return its current SHA-256 revision",
         {"path": TEXT},
@@ -76,7 +82,7 @@ class Workspace:
             for name in self.names
         ]
 
-    def path(self, path):
+    def path(self, path, *, allow_root=False):
         if not isinstance(path, str) or not path:
             raise fail("invalid_path", "Supply a workspace-relative file path")
         relative = Path(path)
@@ -87,7 +93,7 @@ class Workspace:
         if (
             not resolved.is_relative_to(self.root)
             or resolved != destination
-            or resolved == self.root
+            or (resolved == self.root and not allow_root)
         ):
             raise fail(
                 "invalid_path", "Choose a file inside the workspace without symlinks"
@@ -95,6 +101,39 @@ class Workspace:
         if not resolved.parent.is_dir():
             raise fail("missing_directory", "The parent directory does not exist")
         return resolved
+
+    def list_files(self, directory, after):
+        if after and ("/" in after or "\0" in after or len(after) > 255):
+            raise fail("invalid_cursor", "Use the next cursor returned by list_files")
+        try:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except NotADirectoryError:
+            raise fail("invalid_directory", "Choose a directory in the workspace") from None
+        try:
+            with os.scandir(fd) as entries:
+                names = heapq.nsmallest(
+                    31,
+                    (
+                        (entry.name, entry)
+                        for entry in entries
+                        if entry.name > after
+                        and not entry.name.startswith(".")
+                        and not any(0xD800 <= ord(char) <= 0xDFFF for char in entry.name)
+                    ),
+                )
+                page = []
+                for name, entry in names[:30]:
+                    kind = "other"
+                    if entry.is_dir(follow_symlinks=False):
+                        kind = "directory"
+                    elif entry.is_file(follow_symlinks=False):
+                        kind = "file"
+                    elif entry.is_symlink():
+                        kind = "symlink"
+                    page.append({"name": name, "kind": kind})
+        finally:
+            os.close(fd)
+        return {"entries": page, "next": page[-1]["name"] if len(names) > len(page) else None}
 
     def read(self, path):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -242,6 +281,9 @@ class Workspace:
                 )
             if name == "python_eval":
                 return await self.evaluate(params["code"])
+            if name == "list_files":
+                directory = self.path(params["path"], allow_root=True)
+                return self.list_files(directory, params.get("after", ""))
             path = self.path(params["path"])
             if name == "read_file":
                 text, revision, _ = self.read(path)
