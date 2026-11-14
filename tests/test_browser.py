@@ -162,7 +162,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('button "Save"', snapshot["tree"])
         self.assertFalse(snapshot["truncated"])
         await worker.invoke(
-            "element", a | {"action": "fill", "by": "label", "name": "Fixture note", "text": "semantic check"}
+            "element", a | {
+                "action": "fill", "by": "label", "name": "Fixture note",
+                "role": "textbox", "text": "semantic check",
+            }
         )
         save = a | {"action": "click", "by": "role", "role": "button", "name": "Save"}
         await worker.invoke("element", save)

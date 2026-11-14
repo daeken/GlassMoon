@@ -37,11 +37,20 @@ TOOLS = {
         "Read, click, or fill one visible element by its exact accessible name, label, or placeholder. "
         "For by=role, include the role. For action=fill, include text. Ambiguous targets fail.",
         WINDOW | {
-            "action": TEXT | {"enum": ["read", "click", "fill"]},
-            "by": TEXT | {"enum": ["role", "label", "placeholder"]},
-            "name": TEXT,
+            "action": TEXT | {
+                "enum": ["read", "click", "fill"],
+                "description": "The operation to perform on the selected element.",
+            },
+            "by": TEXT | {
+                "enum": ["role", "label", "placeholder"],
+                "description": "The way to look up the element.",
+            },
+            "name": TEXT | {"description": "Exact name, label text, or placeholder text."},
         },
-        {"role": TEXT, "text": TEXT},
+        {
+            "role": TEXT | {"description": "ARIA role such as button. Used with by=role."},
+            "text": TEXT | {"description": "The string to enter when action=fill."},
+        },
     ),
     "diagnostics": tool(
         "Read recent page errors, console warnings, and failed requests for this window.",
@@ -438,9 +447,9 @@ class Browser:
             raise fail("invalid_target", "Use an exact element name of up to 200 characters")
         if by == "role" and isinstance(role, str) and role.isascii() and role.isalpha():
             locator = page.get_by_role(role, name=name, exact=True)
-        elif by == "label" and role is None:
+        elif by == "label":
             locator = page.get_by_label(name, exact=True)
-        elif by == "placeholder" and role is None:
+        elif by == "placeholder":
             locator = page.get_by_placeholder(name, exact=True)
         else:
             raise fail("invalid_target", "Choose a role and name, label, or placeholder")
