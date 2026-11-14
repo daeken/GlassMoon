@@ -310,8 +310,14 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(received["params"], {"value": "check"})
 
             version = "v2"
+            with self.assertRaises(RequestError) as stale_release:
+                await release(
+                    socket, generation, "echo", {}, {"version": "v2"}, expected_active=0,
+                )
+            self.assertEqual(stale_release.exception.code, "active_changed")
             checked = await release(
-                socket, generation, "echo", {"value": "test"}, {"version": "v2"}, check_only=True,
+                socket, generation, "echo", {"value": "test"}, {"version": "v2"},
+                check_only=True, expected_active=previous,
             )
             self.assertTrue(checked["probe_passed"])
             async with connect(socket) as observer:

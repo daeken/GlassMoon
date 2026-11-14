@@ -8,7 +8,10 @@ from .ipc import ProtocolError, RequestError, call, connect
 from .service import fail
 
 
-async def release(socket, generation, probe, params, expected, timeout=8, *, check_only=False):
+async def release(
+    socket, generation, probe, params, expected, timeout=8, *, check_only=False,
+    expected_active=None,
+):
     if not isinstance(expected, dict) or not expected or not isinstance(params, dict):
         raise fail("invalid_probe", "Supply probe parameters and at least one expected result field")
     async with asyncio.timeout(timeout), connect(socket) as wire:
@@ -30,6 +33,10 @@ async def release(socket, generation, probe, params, expected, timeout=8, *, che
             ),
             None,
         )
+        if expected_active is not None:
+            observed = previous if previous is not None else 0
+            if observed != expected_active:
+                raise fail("active_changed", "The active generation changed since review")
         result = await call(
             socket,
             service,
@@ -68,6 +75,9 @@ def main():
     parser.add_argument("--params", type=json.loads, default={})
     parser.add_argument("--expect", type=json.loads, required=True)
     parser.add_argument("--timeout", type=float, default=8)
+    parser.add_argument(
+        "--expected-active", type=int, help="Require the reviewed active generation, or 0 for an empty route"
+    )
     parser.add_argument("--check-only", action="store_true", help="Probe the candidate without activating it")
     args = parser.parse_args()
     if (
@@ -80,6 +90,8 @@ def main():
         )
     if not 0 < args.timeout <= 60 or args.generation <= 0:
         parser.error("Use a positive generation and a timeout up to 60 seconds")
+    if args.expected_active is not None and args.expected_active < 0:
+        parser.error("Use a positive active generation or 0 for an empty route")
     try:
         result = asyncio.run(
             release(
@@ -90,6 +102,7 @@ def main():
                 args.expect,
                 args.timeout,
                 check_only=args.check_only,
+                expected_active=args.expected_active,
             )
         )
     except (RequestError, ProtocolError, EOFError, OSError, TimeoutError) as error:
