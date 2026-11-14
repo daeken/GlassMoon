@@ -4,6 +4,7 @@
 
 - `/queue AGENT TASK` — queue a task for the named agent.
 - `/queue-check AGENT CHECK | TASK` — queue a task with a check to perform if its outcome becomes uncertain.
+- `/queue-evidence AGENT OWNER KEY | TASK` — confirm an observation exists and include it in the recipient's first delivery.
 - `/tasks` — list tasks and their current status.
 - `/handoff` — see work needing review, work in progress, queued tasks, and recent replies. Entries show last recorded activity, whether the recipient has an active worker, and whether there is a recovery check or linked evidence. Completed work includes a short excerpt. Follow `/task ID` for the full reply.
 - `/task ID` — inspect a task and any recorded result.

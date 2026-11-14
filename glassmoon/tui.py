@@ -672,7 +672,7 @@ class Terminal:
         )
         await self.show_task(identifier)
 
-    async def queue_task(self, agent, instruction, recovery_check=None):
+    async def queue_task(self, agent, instruction, recovery_check=None, *, evidence=None):
         params = {
             "sender": "operator",
             "agent": agent,
@@ -681,6 +681,8 @@ class Terminal:
         }
         if recovery_check is not None:
             params["recovery_check"] = recovery_check
+        if evidence:
+            params["evidence"] = evidence
         task = await call_tool(
             self.socket, self.mailbox, "submit", params
         )
@@ -688,6 +690,17 @@ class Terminal:
             "status",
             f"Queued {task['id']} for {agent}. Use /task {task['id']} to check it.",
         )
+
+    async def queue_evidence_task(self, argument):
+        recipient, separator, instruction = argument.partition("|")
+        fields = recipient.split()
+        if len(fields) != 3 or not separator or not instruction.strip():
+            self.log("status", "Usage /queue-evidence AGENT OWNER KEY | TASK")
+            return
+        agent, owner, key = fields
+        reference = {"owner": owner, "key": key}
+        await call_tool(self.socket, self.evidence, "read", reference)
+        await self.queue_task(agent.removeprefix("agent."), instruction.strip(), evidence=[reference])
 
     async def queue_maintainer(self, service, instruction, generation=None):
         active = await active_service(self.socket, service)
@@ -770,6 +783,7 @@ class Terminal:
                         "/queue AGENT TASK  /tasks [AGENT]  /task ID  /reconcile ID",
                     )
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
+                    self.log(self.active, "/queue-evidence AGENT OWNER KEY | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
                     self.log(self.active, "/watch-task ID follows a task. Repeat to stop watching.")
@@ -862,6 +876,9 @@ class Terminal:
                             agent.removeprefix("agent."), instruction, recovery
                         )
                     )
+                case "/queue-evidence" if argument:
+                    self.select("status")
+                    self.start(lambda: self.queue_evidence_task(argument))
                 case "/task" if argument:
                     self.select("status")
                     self.start(lambda: self.show_task(argument))

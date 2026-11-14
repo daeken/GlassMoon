@@ -736,3 +736,16 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         with patch("glassmoon.tui.call_tool", rejected), self.assertRaises(RequestError):
             await terminal.link_evidence("task moon missing")
         rejected.assert_awaited_once()
+
+    async def test_terminal_queues_published_evidence_with_initial_task(self):
+        terminal = Terminal(None, "ipc")
+        ref = {"owner": "moon", "key": "screenshot"}
+        reader = AsyncMock(side_effect=[{"summary": "Fixture"}, {"id": "task"}])
+        with patch("glassmoon.tui.call_tool", reader):
+            await terminal.queue_evidence_task("agent.tide moon screenshot | Compare the observation")
+        read, submit = [call.args for call in reader.await_args_list]
+        self.assertEqual(read, ("ipc", "tools.evidence", "read", ref))
+        self.assertEqual(submit[:3], ("ipc", "tools.mailbox", "submit"))
+        self.assertEqual(submit[3]["agent"], "tide")
+        self.assertEqual(submit[3]["evidence"], [ref])
+        self.assertEqual(submit[3]["task"], "Compare the observation")
