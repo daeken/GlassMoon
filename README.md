@@ -15,6 +15,8 @@ uv run --locked python -m glassmoon.stack examples/offline-stack.toml \
 
 The launcher checks registration and configured readiness probes, logs each child, and cleans up its own process groups on exit. Start with a new state directory. After stopping the stack, use `--resume` with the same state directory and working directory to preserve its tasks and conversations. Resume can clear a stale broker socket after an abrupt exit. The launcher forwards only the environment entries listed in the manifest or needed for local execution. Use trusted manifests and commands.
 
+Use `--restart-broker` with workers that support reconnecting. The launcher replaces the broker once after an exit and waits for its workers to register and pass their readiness probes.
+
 ## Chat with an agent
 
 Build the broker and install the Python dependencies. Choose a private socket directory and share the printed socket path across the terminals you use below.

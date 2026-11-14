@@ -45,6 +45,7 @@ def main():
                 handle,
                 kind="model_provider",
                 maintainer=args.maintainer,
+                reconnect=True,
             )
         )
     except KeyboardInterrupt:

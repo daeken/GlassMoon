@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import signal
 import socket
 import sys
 import unittest
@@ -11,6 +13,33 @@ from glassmoon.toolbox import call_tool
 
 
 class StackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stack_restarts_broker_and_preserves_agent_state(self):
+        with TemporaryDirectory(prefix="gm-stack-recovery-", dir="/tmp") as root:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "glassmoon.stack", "examples/offline-stack.toml",
+                "--state", Path(root) / "state", "--restart-broker",
+                stdout=asyncio.subprocess.PIPE,
+            )
+            try:
+                async with asyncio.timeout(12):
+                    ready = json.loads(await process.stdout.readline())
+                    socket_path = ready["socket"]
+                    await call(socket_path, "agent.moon", "chat", {"text": "Before broker exit"})
+                    os.kill(ready["broker_pid"], signal.SIGKILL)
+                    exited = json.loads(await process.stdout.readline())
+                    recovered = json.loads(await process.stdout.readline())
+                    self.assertEqual((exited["event"], exited["process"]), ("exited", "broker"))
+                    self.assertEqual(recovered["event"], "broker_recovered")
+                    self.assertNotEqual(ready["broker_pid"], recovered["broker_pid"])
+                    history = await call(socket_path, "agent.moon", "history", {})
+                    self.assertEqual(history["revision"], 2)
+                    reply = await call(socket_path, "agent.moon", "chat", {"text": "After broker exit"})
+                    self.assertIn("After broker exit", str(reply["message"]))
+            finally:
+                if process.returncode is None:
+                    process.terminate()
+                    await asyncio.wait_for(process.wait(), 5)
+
     async def test_dispatcher_discovers_agent_registered_after_start(self):
         with TemporaryDirectory(prefix="gm-discover-", dir="/tmp") as root:
             state = Path(root) / "state"

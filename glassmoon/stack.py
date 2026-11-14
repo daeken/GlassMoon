@@ -189,7 +189,7 @@ class Stack:
                 f"{service or 'broker'} exited with status {process.returncode}"
             )
 
-    async def run(self, smoke):
+    async def run(self, smoke, *, restart_broker=False):
         async with AsyncExitStack() as stack:
             stack.enter_context(self.state_lock())
             if self.resume:
@@ -219,6 +219,7 @@ class Stack:
                     {
                         "event": "ready",
                         "socket": str(self.socket),
+                        "broker_pid": processes[0][1].pid,
                         "workers": [name for name, _ in processes[1:]],
                     }
                 ),
@@ -230,28 +231,39 @@ class Stack:
                 asyncio.create_task(process.wait()): name for name, process in processes
             }
             try:
-                done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    print(
-                        json.dumps(
-                            {
-                                "event": "exited",
-                                "process": waits[task],
-                                "status": task.result(),
-                            }
-                        ),
-                        flush=True,
-                    )
-                return 1
+                while True:
+                    done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+                    exits = {waits.pop(task): task.result() for task in done}
+                    for name, status in exits.items():
+                        print(
+                            json.dumps({"event": "exited", "process": name, "status": status}),
+                            flush=True,
+                        )
+                    if not restart_broker or set(exits) != {"broker"}:
+                        return 1
+                    restart_broker = False
+                    await self.recover_socket()
+                    replacement = await self.start_process(stack, "broker", self.config["broker"])
+                    waits[asyncio.create_task(replacement.wait())] = "broker"
+                    await self.readiness(replacement)
+                    workers = self.config.get("worker", [])
+                    for worker, (_, process) in zip(workers, processes[1:], strict=True):
+                        await self.readiness(
+                            process, worker.get("service", worker["name"]), worker.get("probe")
+                        )
+                    print(json.dumps({
+                        "event": "broker_recovered", "socket": str(self.socket),
+                        "broker_pid": replacement.pid,
+                    }), flush=True)
             finally:
                 for task in waits:
                     task.cancel()
                 await asyncio.gather(*waits, return_exceptions=True)
 
 
-async def run(stack, smoke):
+async def run(stack, smoke, *, restart_broker=False):
     loop = asyncio.get_running_loop()
-    task = asyncio.create_task(stack.run(smoke))
+    task = asyncio.create_task(stack.run(smoke, restart_broker=restart_broker))
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, task.cancel)
     try:
@@ -286,6 +298,9 @@ def main():
     parser.add_argument(
         "--resume", action="store_true", help="Resume a previously created stack directory"
     )
+    parser.add_argument(
+        "--restart-broker", action="store_true", help="Recover one broker exit and wait for workers to reconnect"
+    )
     args = parser.parse_args()
     if not 0.1 <= args.timeout <= 120:
         parser.error("--timeout must be between 0.1 and 120 seconds")
@@ -295,6 +310,7 @@ def main():
             run(
                 Stack(config, args.root.resolve(), args.state.resolve(), args.timeout, args.resume),
                 args.smoke,
+                restart_broker=args.restart_broker,
             )
         )
     except (
