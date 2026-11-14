@@ -316,6 +316,7 @@ async def run(args):
             {"models": CATALOG, "generate": GENERATE},
             adapter.handle,
             kind="model_provider",
+            staged=args.staged,
             reconnect=True,
             maintainer=args.maintainer,
         )
@@ -328,8 +329,12 @@ def main():
     parser.add_argument("provider", choices=PROVIDERS)
     add_service_args(parser, None)
     parser.add_argument("--catalog", help="Optional JSON catalog of model capabilities")
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
+    args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     try:
-        asyncio.run(run(parser.parse_args()))
+        asyncio.run(run(args))
     except KeyboardInterrupt:
         return 130
     except (RequestError, ProtocolError, EOFError, OSError, ValueError) as error:

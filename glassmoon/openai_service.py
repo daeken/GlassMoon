@@ -363,6 +363,7 @@ async def run(args):
                 METHODS,
                 provider.handle,
                 kind="model_provider",
+                staged=args.staged,
                 reconnect=True,
                 maintainer=args.maintainer,
             )
@@ -380,11 +381,14 @@ def main():
         command.add_argument("--profile", default=DEFAULT_PROFILE)
     worker.add_argument("--catalog", required=True)
     worker.add_argument("--state", default=STATE)
+    worker.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     args = parser.parse_args()
     try:
         if args.command == "login":
             login(Profile(args.profile))
         else:
+            if args.staged and args.replace is not None:
+                worker.error("--staged and --replace cannot be used together")
             asyncio.run(run(args))
     except KeyboardInterrupt:
         return 130

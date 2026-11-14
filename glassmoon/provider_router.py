@@ -236,7 +236,10 @@ class Router:
 
 def main():
     parser = service_args(__doc__, "models")
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     try:
         asyncio.run(
             serve(
@@ -245,6 +248,7 @@ def main():
                 args.replace,
                 METHODS,
                 Router(args.socket).handle,
+                staged=args.staged,
                 reconnect=True,
                 maintainer=args.maintainer,
             )
