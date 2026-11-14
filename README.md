@@ -203,6 +203,8 @@ For disposable browser workers, `--idle-seconds N` allows opening a new window t
 
 To check browser integration locally, run `uv run --locked python -m unittest discover -s tests -p test_browser.py`. With the browser binaries installed, the test opens `examples/browser-smoke.html` over loopback, fills and submits the note form by its accessible labels, checks the visible result, and exercises the screenshot contract in each installed engine.
 
+The example Python tool `examples/browser_note_tools.py` converts note text into a batch for that fixture. Publish it with `glassmoon.toolbox` and pass the returned steps to the browser's `actions` tool when you want to run the batch.
+
 ### Share a browser screenshot between agents
 
 Start a local visual evidence service with its own SQLite file. Pass `--evidence tools.evidence` when launching a browser worker, and add `--tool-service tools.evidence` to the receiving agent.

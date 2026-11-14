@@ -8,6 +8,7 @@ from time import monotonic
 
 from playwright.async_api import async_playwright
 
+from examples.browser_note_tools import note_actions
 from glassmoon.browser import Browser, request_path
 from glassmoon.evidence import Evidence
 from glassmoon.ipc import RequestError
@@ -163,6 +164,11 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                     {"action": "wait_for", "selector": "#status", "text": "Saved: Local smoke"},
                 ]})
                 self.assertEqual(actions["completed"], 3, actions)
+                for text in ("Recipe first", "Recipe second"):
+                    recipe = await worker.invoke("actions", handle | {"steps": note_actions(text)})
+                    self.assertEqual(recipe["completed"], 3, recipe)
+                    result = await worker.invoke("inspect", handle)
+                    self.assertIn(f"Saved: {text}", result["text"])
                 status = await worker.invoke(
                     "evaluate", handle | {"script": "() => fetch('/status').then(r => r.text())"}
                 )
