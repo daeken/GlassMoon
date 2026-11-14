@@ -285,7 +285,7 @@ To retire a rejected candidate, run `python -m glassmoon --socket "$GLASSMOON_SO
 
 Shared tool workers expose `health` with `status` and their tool count. Agents report their identity and saved conversation revision. These probes check basic worker readiness. Use a service-specific probe when release depends on a downstream dependency.
 
-Agents, browsers, the mailbox, the evidence service, and MCP bridges also accept `--staged`. Use the same state path for stateful replacements. For an agent, probe its saved revision before activation. For a browser replacement, old windows close when the old worker retires.
+Agents, browser and macOS desktop workers, the mailbox, the evidence service, and MCP bridges also accept `--staged`. Use the same state path for stateful replacements. For an agent, probe its saved revision before activation. For a browser replacement, old windows close when the old worker retires.
 
 Browser handles belong to the worker that created them. A replacement returns `stale_window` for a handle issued by another worker. Open a fresh window to continue. A surviving browser worker keeps its handles when only the broker reconnects.
 

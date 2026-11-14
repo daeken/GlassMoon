@@ -103,6 +103,7 @@ def main():
         help="Expose real desktop mouse and keyboard actions",
     )
     parser.add_argument("--window-capture", action="store_true", help="Expose capture of the configured app's windows")
+    parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     parser.add_argument("--evidence", help="Evidence service for explicit app-window screenshot sharing")
     parser.add_argument(
         "--target-pid",
@@ -110,6 +111,8 @@ def main():
         help="Allow input only while this macOS application is frontmost",
     )
     args = parser.parse_args()
+    if args.staged and args.replace is not None:
+        parser.error("--staged and --replace cannot be used together")
     if args.target_pid is not None and not 1 <= args.target_pid <= 2_147_483_647:
         parser.error("--target-pid must be a valid macOS process ID")
     if args.window_capture and args.target_pid is None:
@@ -150,6 +153,7 @@ def main():
                 args.replace,
                 METHODS,
                 service.handle,
+                staged=args.staged,
                 reconnect=True,
                 maintainer=args.maintainer,
             )
