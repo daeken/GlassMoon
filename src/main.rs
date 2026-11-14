@@ -5,14 +5,16 @@ use broker::{Broker, PeerId};
 use futures_util::{SinkExt, StreamExt};
 use protocol::{Incoming, MAX_FRAME};
 use std::error::Error;
-use std::fs::{self, Permissions};
+use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{self, Read};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::PathBuf;
-use std::time::Duration;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::{Duration, Instant};
 use tokio_util::codec::{Framed, LinesCodec};
 
 enum Event {
@@ -20,40 +22,72 @@ enum Event {
     Disconnected(PeerId),
 }
 
+const USAGE: &str = "usage: glassmoon SOCKET [DRAIN_MS] [--bootstrap COMMAND ARG ...]";
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut args = std::env::args_os().skip(1);
-    let path = args.next().ok_or("usage: glassmoon SOCKET [DRAIN_MS]")?;
-    let drain_ms = args
-        .next()
-        .map(|value| {
-            value
-                .to_str()
-                .and_then(|value| value.parse().ok())
-                .ok_or("invalid drain time")
-        })
-        .transpose()?
-        .unwrap_or(30_000);
-    if args.next().is_some() || !(1..=3_600_000).contains(&drain_ms) {
-        return Err("usage: glassmoon SOCKET [DRAIN_MS (1–3600000)]".into());
+    let mut args = std::env::args_os().skip(1).peekable();
+    if args
+        .peek()
+        .is_some_and(|value| value == "--help" || value == "-h")
+    {
+        println!("{USAGE}");
+        return Ok(());
     }
+    let path = PathBuf::from(args.next().ok_or(USAGE)?);
+    let mut drain_ms = 30_000;
+    if args.peek().is_some_and(|value| value != "--bootstrap") {
+        drain_ms = args
+            .next()
+            .and_then(|value| value.to_str()?.parse().ok())
+            .filter(|value| (1..=3_600_000).contains(value))
+            .ok_or("DRAIN_MS must be between 1 and 3600000")?;
+    }
+    let bootstrap = match args.next() {
+        None => None,
+        Some(flag) if flag == "--bootstrap" => {
+            Some((args.next().ok_or(USAGE)?, args.collect::<Vec<_>>()))
+        }
+        _ => return Err(USAGE.into()),
+    };
 
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
-    let path = PathBuf::from(path);
+    let _lock = bootstrap.as_ref().map(|_| lock_socket(&path)).transpose()?;
     let listener = UnixListener::bind(&path)?;
     let _socket = SocketFile::new(path)?;
-    let (events, mut incoming) = mpsc::channel(256);
     // Keep generation IDs distinct across broker lifetimes, within JSON's exact integer range.
     let mut seed = [0; 4];
     fs::File::open("/dev/urandom")?.read_exact(&mut seed)?;
     let first_generation = (u64::from(u32::from_ne_bytes(seed)) << 20) + 1;
+    let mut bootstrap = bootstrap
+        .map(|(program, args)| {
+            Command::new(program)
+                .args(args)
+                .stdin(Stdio::piped())
+                .process_group(0)
+                .kill_on_drop(true)
+                .spawn()
+        })
+        .transpose()?;
+    let bootstrap_group = bootstrap.as_ref().and_then(Child::id);
+    // Child::wait closes stdin itself unless we keep the writer separately.
+    let mut bootstrap_pipe = bootstrap.as_mut().and_then(|child| child.stdin.take());
+    let mut shutdown_deadline = None;
+    let (events, mut incoming) = mpsc::channel(256);
     let mut broker = Broker::new(Duration::from_millis(drain_ms), first_generation);
     loop {
         let deadline = broker.next_deadline();
         tokio::select! {
             accepted = listener.accept() => {
-                let (socket, _) = accepted?;
+                let (socket, _) = match accepted {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        eprintln!("GlassMoon could not accept a connection ({error})");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
                 let (output, outgoing) = mpsc::channel(128);
                 let (close, closed) = oneshot::channel();
                 let peer = broker.connect(output, close);
@@ -67,15 +101,109 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 Event::Disconnected(peer) => broker.disconnect(peer),
             },
             () = wait_for_deadline(deadline) => broker.expire_drains(),
-            _ = interrupt.recv() => break,
-            _ = terminate.recv() => break,
+            status = wait_for_bootstrap(&mut bootstrap) => {
+                if let Some(group) = bootstrap_group {
+                    kill_group(group);
+                }
+                let status = status?;
+                if shutdown_deadline.is_some() {
+                    if !status.success() {
+                        eprintln!("GlassMoon bootstrap exited during shutdown ({status})");
+                    }
+                    break;
+                }
+                return Err(format!("GlassMoon bootstrap exited ({status})").into());
+            },
+            () = wait_for_deadline(shutdown_deadline) => {
+                if let Some(group) = bootstrap_group {
+                    kill_group(group);
+                }
+                if let Some(child) = &mut bootstrap {
+                    let _ = child.wait().await;
+                }
+                return Err("GlassMoon bootstrap exceeded its shutdown deadline".into());
+            },
+            _ = interrupt.recv(), if shutdown_deadline.is_none() => {
+                if !begin_shutdown(&mut bootstrap_pipe, &mut shutdown_deadline) {
+                    break;
+                }
+            },
+            _ = terminate.recv(), if shutdown_deadline.is_none() => {
+                if !begin_shutdown(&mut bootstrap_pipe, &mut shutdown_deadline) {
+                    break;
+                }
+            },
         }
         broker.disconnect_slow_peers();
     }
     Ok(())
 }
 
-async fn wait_for_deadline(deadline: Option<tokio::time::Instant>) {
+fn begin_shutdown(pipe: &mut Option<ChildStdin>, deadline: &mut Option<Instant>) -> bool {
+    // Closing the lifetime pipe asks bootstrap to stop while IPC is still up.
+    if pipe.take().is_none() {
+        return false;
+    }
+    *deadline = Some(Instant::now() + Duration::from_secs(30));
+    true
+}
+
+async fn wait_for_bootstrap(bootstrap: &mut Option<Child>) -> io::Result<std::process::ExitStatus> {
+    match bootstrap {
+        Some(child) => child.wait().await,
+        None => std::future::pending().await,
+    }
+}
+
+fn kill_group(group: u32) {
+    // Bootstrap leads a dedicated process group, so this also terminates any surviving workers.
+    unsafe { libc::kill(-(group as libc::pid_t), libc::SIGKILL) };
+}
+
+fn lock_socket(path: &Path) -> io::Result<File> {
+    let mut lock_path = path.as_os_str().to_owned();
+    lock_path.push(".kernel-lock");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(lock_path)?;
+    lock.try_lock()?;
+    let previous = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(lock),
+        Err(error) => return Err(error),
+    };
+    if !previous.file_type().is_socket() || previous.uid() != lock.metadata()?.uid() {
+        return Err(io::Error::other(
+            "The broker socket path must be an owned Unix socket",
+        ));
+    }
+    match std::os::unix::net::UnixStream::connect(path) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "A broker is already listening",
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(lock),
+        Err(error) => return Err(error),
+    }
+    let current = fs::symlink_metadata(path)?;
+    if (current.dev(), current.ino()) != (previous.dev(), previous.ino()) {
+        return Err(io::Error::other(
+            "The broker socket changed during recovery",
+        ));
+    }
+    fs::remove_file(path)?;
+    Ok(lock)
+}
+
+async fn wait_for_deadline(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,

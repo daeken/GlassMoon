@@ -9,12 +9,66 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from glassmoon.agent import METHODS
-from glassmoon.ipc import call, connect
+from glassmoon.bootstrap import SERVICE
+from glassmoon.ipc import RequestError, active_service, call, connect
+from glassmoon.service import method
 from glassmoon.stack import manifest
 from glassmoon.toolbox import call_tool
 
 
 class StackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_managed_workers_restart_without_overriding_a_live_replacement(self):
+        with TemporaryDirectory(prefix="gm-managed-", dir="/tmp") as root:
+            state = Path(root)
+            socket_path = state / "ipc"
+            broker = await asyncio.create_subprocess_exec(
+                "target/debug/glassmoon", socket_path,
+                "--bootstrap", sys.executable, "-m", "glassmoon.bootstrap",
+                "examples/offline-stack.toml", "--state", state,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+
+            async def wait_for_worker(name, predicate):
+                async with asyncio.timeout(10):
+                    while True:
+                        try:
+                            status = await call(socket_path, SERVICE, "status", {})
+                            worker = next(row for row in status["workers"] if row["name"] == name)
+                            if predicate(status, worker):
+                                return worker
+                        except (OSError, RequestError):
+                            pass
+                        await asyncio.sleep(0.1)
+
+            try:
+                moon = await wait_for_worker("agent.moon", lambda status, row: status["ready"])
+                await call(socket_path, "agent.moon", "chat", {"text": "survives a worker crash"})
+                os.kill(moon["pid"], signal.SIGKILL)
+                await wait_for_worker("agent.moon", lambda _, row: (
+                    row["state"] == "running" and row["pid"] != moon["pid"]
+                ))
+                self.assertEqual((await call(socket_path, "agent.moon", "history", {}))["revision"], 2)
+
+                demo = await active_service(socket_path, "demo")
+                async with connect(socket_path) as replacement:
+                    registered = await replacement.request(
+                        "register", "register", name="demo", interface_version=1,
+                        methods={"test": method("Test a live replacement")},
+                    )
+                    generation = registered["result"]["generation"]
+                    await replacement.request("promote", "promote", expected_active=demo["generation"])
+                    await wait_for_worker("demo", lambda _, row: (
+                        row["state"] == "replacement" and row["replacement_generation"] == generation
+                    ))
+                    self.assertEqual((await active_service(socket_path, "demo"))["generation"], generation)
+                await wait_for_worker("demo", lambda _, row: row["state"] == "running")
+            finally:
+                if broker.returncode is None:
+                    broker.terminate()
+                    await asyncio.wait_for(broker.wait(), 10)
+            self.assertEqual(broker.returncode, 0)
+            self.assertFalse(socket_path.exists())
+
     async def test_dispatcher_term_finishes_admitted_task_without_claiming_next(self):
         with TemporaryDirectory(prefix="gm-dispatch-drain-", dir="/tmp") as root:
             stack = await asyncio.create_subprocess_exec(sys.executable, "-m", "glassmoon.stack",

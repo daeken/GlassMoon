@@ -105,26 +105,33 @@ class Stack:
         return {"socket": str(self.socket), "services": snapshot, "missing": sorted(set(expected) - service_names)}
 
     @contextmanager
-    def state_lock(self):
-        if not self.resume:
+    def state_lock(self, *, managed=False):
+        if managed:
+            self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        elif not self.resume:
             self.state.mkdir(mode=0o700, parents=False, exist_ok=False)
         path = self.state / ".glassmoon-stack"
         flags = os.O_RDWR | os.O_NOFOLLOW
-        if not self.resume:
+        if managed:
+            flags |= os.O_CREAT
+        elif not self.resume:
             flags |= os.O_CREAT | os.O_EXCL
         with os.fdopen(os.open(path, flags, 0o600), "r+") as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise RuntimeError("This stack state is already in use") from None
-            if self.resume and lock.read() != str(self.root):
+            except BlockingIOError as error:
+                if managed:
+                    raise
+                raise RuntimeError("This stack state is already in use") from error
+            saved_root = lock.read()
+            if (self.resume or saved_root) and saved_root != str(self.root):
                 raise ValueError("Use the same working directory when resuming this stack")
-            if not self.resume:
+            if not saved_root:
                 lock.write(str(self.root))
                 lock.flush()
             yield
 
-    async def start_process(self, stack, name, command, extra=None, pass_env=()):
+    async def spawn_process(self, name, command, extra=None, pass_env=(), *, new_session=True):
         env = {
             key: os.environ[key] for key in (*CLEAN_ENV, *pass_env) if key in os.environ
         }
@@ -132,15 +139,18 @@ class Stack:
             {key: render(value, self.variables) for key, value in (extra or {}).items()}
         )
         with (self.state / f"{name}.log").open("ab") as log:
-            process = await asyncio.create_subprocess_exec(
+            return await asyncio.create_subprocess_exec(
                 *(render(value, self.variables) for value in command),
                 cwd=self.root,
                 env=env,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
-                start_new_session=True,
+                start_new_session=new_session,
             )
+
+    async def start_process(self, stack, name, command, extra=None, pass_env=()):
+        process = await self.spawn_process(name, command, extra, pass_env)
         stack.push_async_callback(stop, process)
         return process
 
