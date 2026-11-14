@@ -20,6 +20,7 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
             for error, content in (
                 ("broker command", "broker = [17]\n"),
                 ("worker needs a command", 'command = ["", "arg"]\n'),
+                ("service must be a nonempty string", 'command = ["worker"]\nservice = []\n'),
                 ("environment values", 'command = ["worker"]\nenv = { KEY = 10 }\n'),
                 ("pass_env must be an array", 'command = ["worker"]\npass_env = "KEY"\n'),
             ):

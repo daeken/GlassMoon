@@ -46,6 +46,9 @@ def manifest(path):
         names.add(name)
         if not command_array(worker.get("command")):
             raise ValueError(f"Worker {name} needs a command array of strings")
+        service = worker.get("service", name)
+        if not isinstance(service, str) or not service:
+            raise ValueError(f"Worker {name} service must be a nonempty string")
         environment = worker.get("env", {})
         if not isinstance(environment, dict) or any(
             not isinstance(value, str) for value in environment.values()
