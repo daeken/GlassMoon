@@ -93,16 +93,23 @@ class Agent:
             try:
                 async with asyncio.timeout(5):
                     remote = await list_tools(self.socket, service)
+                additions = {}
+                current = {item["name"] for item in definitions}
                 for tool in functions.definitions({"tools": remote}):
                     name = validate_name(f"{service.replace('.', '_')}__{tool['name']}")
-                    if name in routes or any(
-                        item["name"] == name for item in definitions
-                    ):
+                    if name in current or name in additions:
                         raise fail(
                             "duplicate_tool", f"Tool {name} is already available"
                         )
-                    routes[name] = (service, tool["name"])
-                    definitions.append(tool | {"name": name})
+                    additions[name] = tool
+                updated = [
+                    *definitions,
+                    *(tool | {"name": name} for name, tool in additions.items()),
+                ]
+                definitions = functions.definitions({"tools": updated})
+                routes.update(
+                    (name, (service, tool["name"])) for name, tool in additions.items()
+                )
             except (
                 RequestError,
                 ProtocolError,
@@ -119,7 +126,7 @@ class Agent:
                             "message": f"Tool service {service} unavailable or invalid.",
                         }
                     )
-        return functions.definitions({"tools": definitions}), routes
+        return definitions, routes
 
     async def execute(self, item, routes):
         if item["name"] in routes:

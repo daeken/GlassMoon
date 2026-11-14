@@ -86,7 +86,7 @@ All services on this local socket are trusted. If multiple model providers can s
 
 ## Bootstrap development inside GlassMoon
 
-Agent state keeps the full transcript in SQLite and a separate summary of older complete turns. Agents compact automatically when their unsummarized transcript grows. Use the `compact` RPC to request it explicitly or `info` to inspect the covered revision.
+Agent state keeps the full transcript in SQLite and a separate summary of older complete turns. Agents compact automatically when their unsummarized transcript grows. Use `/compact` in an agent chat or the `compact` RPC to request it explicitly. Use `info` to inspect the covered revision.
 
 ```sh
 uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call agent.moon compact

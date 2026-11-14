@@ -157,6 +157,15 @@ class Terminal:
             self.sending.discard(window)
             self.dirty = True
 
+    async def compact(self, window):
+        result = await call(self.socket, f"agent.{window}", "compact", {})
+        text = (
+            f"Compacted through revision {result['through_revision']}."
+            if result["changed"]
+            else "No older turns to compact."
+        )
+        self.log(window, text)
+
     def start(self, operation, window="status"):
         async def run():
             try:
@@ -196,7 +205,7 @@ class Terminal:
                 case "/help":
                     self.log(
                         self.active,
-                        "/query NAME  /services  /describe NAME|ID  /models  /status  /quit",
+                        "/query NAME  /compact  /services  /describe NAME|ID  /models  /status  /quit",
                     )
                     self.log(
                         self.active,
@@ -204,6 +213,9 @@ class Terminal:
                     )
                 case "/status":
                     self.select("status")
+                case "/compact" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.compact(window), window)
                 case "/services":
                     self.select("status")
                     self.start(self.list_services)
