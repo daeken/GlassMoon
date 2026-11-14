@@ -513,6 +513,32 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(receipt["reply"]["outcome"], "review")
             tool.assert_awaited_once()
 
+    async def test_provider_cutover_after_tool_execution_saves_partial_receipt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {}, "", store, tool_services=["tools.fixture"])
+            catalog = [{"name": "note", "description": "Save note", "parameters": {"type": "object"}}]
+            reply = {
+                "provider": "test", "model": "test", "provider_generation": 31,
+                "message": {"role": "assistant", "content": ""},
+                "tool_calls": [{"id": "call", "name": "tools_fixture__note", "arguments": "{}"}],
+            }
+            changed = RequestError({"code": "provider_changed", "message": "Provider replaced"})
+            effect = AsyncMock(return_value={"saved": True})
+            task = {"id": "f" * 32, "attempt": 1, "text": "Save the note"}
+            with (
+                patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(14, catalog))),
+                patch("glassmoon.agent.call", AsyncMock(side_effect=[reply, changed])),
+                patch("glassmoon.agent.call_tool", effect),
+            ):
+                partial = await agent.handle("run_task", task, ignore, False)
+                self.assertEqual(partial["outcome"], "review")
+                self.assertIn("provider_changed", partial["message"]["content"])
+                self.assertIn("tools_fixture__note", partial["message"]["content"])
+                self.assertEqual(await agent.handle("run_task", task, ignore, False), partial)
+            effect.assert_awaited_once()
+
     async def test_oversized_tool_result_saves_partial_report(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))

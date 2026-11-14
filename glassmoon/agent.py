@@ -356,10 +356,15 @@ class Agent:
                     params,
                     on_chunk=emit if stream else None,
                 )
-            except (EOFError, OSError):
-                raise fail(
-                    "model_unavailable", "Connection to the model router ended"
-                ) from None
+            except (RequestError, ProtocolError, EOFError, OSError) as error:
+                if rounds:
+                    reason = error.code if isinstance(error, RequestError) else "connection ended"
+                    return self.partial_reply(
+                        requirements, rounds, f"The model could not continue after tool calls ({reason})."
+                    )
+                if isinstance(error, (ProtocolError, EOFError, OSError)):
+                    raise fail("model_unavailable", "Connection to the model router ended") from None
+                raise
             announced = functions.calls(reply.get("tool_calls", []))
             if not announced:
                 return reply
