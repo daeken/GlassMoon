@@ -18,6 +18,8 @@ For a queued task with zero attempts, use `/resolve ID REVISION cancel NOTE` to 
 
 Find the parent task with `/tasks`, then open `/task ID` and `/children ID`. Use `/timeline ID` on the relevant child. For example, if Moon asks Finch to extract Markdown headings, the timeline can show that the headings tool returned. Finch's recorded reply contains the heading text. When a task needs review, check its durable receipt with `/reconcile ID` and verify any remaining effects before recording a resolution.
 
+For a visual check, follow the `/evidence OWNER KEY` reference shown by `/task ID`. The evidence view gives the observation and its screenshot digest. Use `/save-image OWNER KEY PATH` to inspect the screenshot locally. For example, a screenshot showing `Saved: Semantic handoff` can verify what the fixture displayed. Record that observation with `/resolve ID REVISION verified NOTE` when the task only asked for a visible confirmation.
+
 ## Ambiguous outcomes
 
 A timeout or worker exit does not prove that a tool had no effect. Ambiguous work stays in review until its receipt and effects can be checked. Do not automatically replay it. Reconciliation can recover a completed receipt; if no reliable receipt exists, record independently verified completion with `verified`, requeue when a retry is warranted, or cancel the task.
