@@ -619,3 +619,22 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         events = self.rpc("timeline", id=task["id"])["events"]
         self.assertEqual([event["kind"] for event in events], ["evidence_attached", "submitted"])
         self.assertEqual(events[0]["name"], "moon/screenshot")
+
+    def test_evidence_can_name_the_attempt_that_produced_it(self):
+        task = self.rpc("submit", **TASK)
+        self.rpc("claim", agent="tide", lease_seconds=1)
+        self.now += 2
+        review = self.rpc("get", id=task["id"])
+        self.rpc("review", id=task["id"], action="requeue", note="Retry the fixture", expected_revision=review["revision"])
+        self.rpc("claim", agent="tide", lease_seconds=1)
+        fields = {"id": task["id"], "owner": "tide", "key": "before-retry"}
+        attached = self.rpc("attach_evidence", **fields, attempt=1)
+        self.assertEqual(self.rpc("attach_evidence", **fields), attached)
+        with self.assertRaises(RequestError) as conflict:
+            self.rpc("attach_evidence", **fields, attempt=2)
+        self.assertEqual(conflict.exception.code, "evidence_conflict")
+        self.box = Mailbox(self.path, clock=lambda: self.now)
+        row = self.rpc("get", id=task["id"])
+        self.assertEqual((row["attempts"], row["evidence"][0]["attempt"]), (2, 1))
+        event = self.rpc("timeline", id=task["id"])["events"][0]
+        self.assertEqual((event["kind"], event["attempt"]), ("evidence_attached", 1))

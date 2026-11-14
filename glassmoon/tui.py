@@ -402,7 +402,8 @@ class Terminal:
         if task.get("parent"):
             self.log("status", f"Parent task {task['parent']}")
         for reference in task.get("evidence", []):
-            self.log("status", f"Evidence /evidence {reference['owner']} {reference['key']}")
+            attempt = f" (attempt {reference['attempt']})" if "attempt" in reference else ""
+            self.log("status", f"Evidence /evidence {reference['owner']} {reference['key']}{attempt}")
         if task.get("recovery_check"):
             self.log("status", f"Recovery check from submitter — {task['recovery_check']}")
         if task["status"] == "queued" and task.get("available_at", 0) > datetime.now().timestamp():

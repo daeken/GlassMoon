@@ -38,6 +38,7 @@ TOOLS = {
     "attach_evidence": tool(
         "Attach a reference to published evidence to a task.",
         {"id": TEXT, "owner": TEXT, "key": TEXT},
+        {"attempt": INTEGER | {"description": "The attempt that produced the evidence. Omit when unknown."}},
     ),
     "review": tool(
         "Resolve an interrupted task after checking its effects, or cancel an unclaimed task.",
@@ -127,7 +128,7 @@ class Mailbox:
                 CREATE INDEX IF NOT EXISTS task_history ON task_events(task_id, seq);
                 CREATE TABLE IF NOT EXISTS task_evidence (
                     task_id TEXT NOT NULL REFERENCES tasks(id), owner TEXT NOT NULL,
-                    key TEXT NOT NULL, PRIMARY KEY(task_id, owner, key)
+                    key TEXT NOT NULL, attempt INTEGER, PRIMARY KEY(task_id, owner, key)
                 );
             """)
             db.execute("BEGIN IMMEDIATE")
@@ -138,6 +139,9 @@ class Mailbox:
                 db.execute("ALTER TABLE tasks ADD COLUMN parent TEXT REFERENCES tasks(id)")
             if "available_at" not in fields:
                 db.execute("ALTER TABLE tasks ADD COLUMN available_at REAL NOT NULL DEFAULT 0")
+            evidence_fields = {field[1] for field in db.execute("PRAGMA table_info(task_evidence)")}
+            if "attempt" not in evidence_fields:
+                db.execute("ALTER TABLE task_evidence ADD COLUMN attempt INTEGER")
             db.execute("CREATE INDEX IF NOT EXISTS task_children ON tasks(parent, seq)")
 
     @contextmanager
@@ -203,22 +207,32 @@ class Mailbox:
             "before": rows[19]["seq"] if len(rows) > 20 else None,
         }
 
-    def attach_evidence(self, db, now, id, owner, key):
+    def attach_evidence(self, db, now, id, owner, key, attempt=None):
         if not evidence_identifier(owner) or not evidence_identifier(key):
             raise fail("invalid_evidence_key", "Use a simple owner and key")
         row = db.execute("SELECT attempts FROM tasks WHERE id=?", (id,)).fetchone()
         if row is None:
             raise fail("unknown_task", "Task does not exist")
+        if attempt is not None:
+            number(attempt, 1, row["attempts"], "attempt")
         fields = (id, owner, key)
-        if not db.execute(
-            "SELECT 1 FROM task_evidence WHERE task_id=? AND owner=? AND key=?", fields
-        ).fetchone():
+        previous = db.execute(
+            "SELECT attempt FROM task_evidence WHERE task_id=? AND owner=? AND key=?", fields
+        ).fetchone()
+        if previous is None:
             count = db.execute("SELECT COUNT(*) FROM task_evidence WHERE task_id=?", (id,)).fetchone()[0]
             if count >= 12:
                 raise fail("evidence_limit", "A task can link at most 12 evidence references")
-            db.execute("INSERT INTO task_evidence VALUES (?, ?, ?)", fields)
-            self.event(db, now, id, row["attempts"], "evidence_attached", f"{owner}/{key}")
-        return {"id": id, "owner": owner, "key": key}
+            db.execute("INSERT INTO task_evidence VALUES (?, ?, ?, ?)", (*fields, attempt))
+            self.event(db, now, id, attempt or 0, "evidence_attached", f"{owner}/{key}")
+        elif attempt is None:
+            attempt = previous["attempt"]
+        elif attempt != previous["attempt"]:
+            raise fail("evidence_conflict", "This task already links the evidence with a different attempt")
+        result = {"id": id, "owner": owner, "key": key}
+        if attempt is not None:
+            result["attempt"] = attempt
+        return result
 
     def submit(self, db, now, sender, agent, key, task, recovery_check=None, parent=None):
         sender, agent, key = (
@@ -273,9 +287,12 @@ class Mailbox:
         ).fetchall()
         task["progress"] = [dict(event) for event in events]
         refs = db.execute(
-            "SELECT owner, key FROM task_evidence WHERE task_id=? ORDER BY owner, key", (id,)
+            "SELECT owner, key, attempt FROM task_evidence WHERE task_id=? ORDER BY owner, key", (id,)
         ).fetchall()
-        task["evidence"] = [dict(ref) for ref in refs]
+        task["evidence"] = [
+            {key: value for key, value in dict(ref).items() if value is not None}
+            for ref in refs
+        ]
         if encoded_size(task) > 60 * 1024 and task["result"]:
             original = task["result"]
             task["result_truncated"] = True
