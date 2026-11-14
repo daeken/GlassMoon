@@ -303,9 +303,16 @@ class Agent:
                 if rounds:
                     params["tool_history"] = rounds
                 budget = TOOL_BUDGET - encoded_size(params)
-            params["messages"] = turn_messages(
-                self.instructions, history, user, budget, summary
-            )
+            try:
+                params["messages"] = turn_messages(
+                    self.instructions, history, user, budget, summary
+                )
+            except RequestError as error:
+                if error.code != "message_too_large" or not rounds:
+                    raise
+                return self.partial_reply(
+                    requirements, rounds, "The tool results exceeded the continuation budget."
+                )
             try:
                 reply = await call(
                     self.socket,
@@ -327,7 +334,7 @@ class Agent:
                 len(rounds) >= MAX_TOOL_ROUNDS
                 or len(used_ids) + len(announced) > MAX_TOOL_CALLS
             ):
-                return self.limited_reply(reply, rounds)
+                return self.partial_reply(reply, rounds, "The turn reached its tool limit.")
             ids = {item["id"] for item in announced}
             if ids & used_ids:
                 raise fail("duplicate_tool_call", "The provider reused a tool call ID")
@@ -388,11 +395,11 @@ class Agent:
         raise AssertionError("Tool loop exhausted")
 
     @staticmethod
-    def limited_reply(reply, rounds):
+    def partial_reply(reply, rounds, reason):
         names = ", ".join(
             f"`{item['name']}`" for exchange in rounds for item in exchange["calls"]
         )
-        explanation = "The tool limit ended this turn before the model saved a final report."
+        explanation = reason + " The model did not finish its report."
         if names:
             explanation += f" Calls already attempted: {names}. Review their effects before continuing."
         return {
