@@ -135,6 +135,33 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProtocolError):
                 await call(socket, "echo", "echo", {"value": "staged only"}, generation=42)
 
+    async def test_supervisor_relinquishes_clean_exit_when_new_worker_owns_route(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(10):
+            socket = await self.start_broker(stack, 5000)
+            supervisor = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "glassmoon.supervisor", "--socket", socket,
+                "--service", "moon.text", "--expect", '{"status":"ok"}',
+                "--interval", "0.05", "--restarts", "0", "--",
+                sys.executable, "-m", "examples.moon_service", "--socket", socket,
+                stdout=asyncio.subprocess.PIPE,
+            )
+            stack.push_async_callback(self.stop_process, supervisor)
+            while b'"event": "healthy"' not in (line := await supervisor.stdout.readline()):
+                self.assertTrue(line)
+            previous = await active_service(socket, "moon.text")
+            replacement = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "examples.moon_service", "--socket", socket,
+                "--replace", str(previous["generation"]), stdout=asyncio.subprocess.PIPE,
+            )
+            stack.push_async_callback(self.stop_process, replacement)
+            line = await replacement.stdout.readline()
+            generation = int(line.split()[-1])
+            output, _ = await supervisor.communicate()
+            self.assertEqual(supervisor.returncode, 0)
+            self.assertIn(b'"event": "route_taken_over"', output)
+            self.assertNotIn(b'"event": "unhealthy"', output)
+            self.assertEqual((await active_service(socket, "moon.text"))["generation"], generation)
+
     async def test_supervisor_preserves_worker_through_broker_outage(self):
         async with AsyncExitStack() as stack, asyncio.timeout(15):
             folder = Path(stack.enter_context(TemporaryDirectory(prefix="gm-supervise-", dir="/tmp")))

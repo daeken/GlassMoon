@@ -8,7 +8,7 @@ import signal
 import uuid
 from pathlib import Path
 
-from .ipc import ProtocolError, RequestError, call, connect
+from .ipc import ProtocolError, RequestError, active_service, call, connect
 from .toolbox import call_tool
 
 
@@ -166,9 +166,19 @@ class Supervisor:
                 if reason is None:
                     self.event("recovered" if attempt else "healthy")
                     reason = await self.monitor()
-                self.event("unhealthy", reason=reason, attempt=attempt)
+                status = self.process.returncode
                 await stop(self.process)
                 self.process = None
+                if status == 0:
+                    try:
+                        async with asyncio.timeout(self.args.timeout):
+                            current = await active_service(self.args.socket, self.args.service)
+                    except (RequestError, ProtocolError, EOFError, OSError, TimeoutError):
+                        current = None
+                    if current is not None:
+                        self.event("route_taken_over", generation=current["generation"])
+                        return 0
+                self.event("unhealthy", reason=reason, attempt=attempt)
                 if self.args.maintainer:
                     status = (
                         "The supervisor is restarting the registered worker."
