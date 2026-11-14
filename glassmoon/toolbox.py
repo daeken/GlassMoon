@@ -1,6 +1,8 @@
 """Publish Python functions as a discoverable GlassMoon tool service."""
 
 import asyncio
+import hashlib
+import hmac
 import importlib.util
 import inspect
 import re
@@ -73,14 +75,20 @@ class ToolService:
         raise fail("unknown_method", "Unknown tool service method")
 
 
-def load(path):
-    spec = importlib.util.spec_from_file_location(
-        "glassmoon_published_tools", Path(path).resolve()
-    )
+def load(path, expected_sha256=None):
+    source = Path(path).resolve()
+    spec = importlib.util.spec_from_file_location("glassmoon_published_tools", source)
     if spec is None or spec.loader is None:
         raise ValueError("Expected the path to a Python module")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    if expected_sha256 is None:
+        spec.loader.exec_module(module)
+    else:
+        data = source.read_bytes()
+        if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), expected_sha256):
+            raise fail("source_changed", "Python tool source did not match the reviewed SHA-256")
+        # Execute the verified entry point without reading it a second time.
+        exec(compile(data, str(source), "exec"), module.__dict__)  # noqa: S102
     for name, declaration in module.TOOLS.items():
         validate_name(name)
         if not callable(declaration["handler"]) or not isinstance(
@@ -118,14 +126,17 @@ async def call_tool(socket, service, name, arguments, *, generation=None):
 def main():
     parser = service_args(__doc__, "tools.python")
     parser.add_argument("module", help="Python module file exporting a TOOLS mapping")
+    parser.add_argument("--sha256", help="Require this reviewed SHA-256 before executing the module")
     parser.add_argument(
         "--staged", action="store_true", help="Wait for a separately probed activation"
     )
     args = parser.parse_args()
     if args.staged and args.replace is not None:
         parser.error("--staged and --replace cannot be used together")
+    if args.sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", args.sha256):
+        parser.error("--sha256 expects 64 lowercase hexadecimal characters")
     try:
-        service = load(args.module)
+        service = load(args.module, args.sha256)
         asyncio.run(
             serve(
                 args.socket,

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import sys
 import tempfile
@@ -290,7 +291,8 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 'TOOLS = {"multiply": {"description": "Multiply", "parameters": {"type": "object"},'
                 ' "handler": lambda a, b: a * b}}\n'
             )
-            published = load(plugin)
+            source_hash = hashlib.sha256(plugin.read_bytes()).hexdigest()
+            published = load(plugin, source_hash)
             self.assertEqual(await published.handle("health", {}, ignore, False), {"status": "ok", "tools": 1})
             response = await published.handle(
                 "invoke",
@@ -299,6 +301,10 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 False,
             )
             self.assertEqual(response["value"], 42)
+            plugin.write_text("raise AssertionError('unreviewed source executed')\n")
+            with self.assertRaises(RequestError) as changed:
+                load(plugin, source_hash)
+            self.assertEqual(changed.exception.code, "source_changed")
             module = root / "mcp.py"
             module.write_text(MCP_SERVER)
             bridge = Bridge(

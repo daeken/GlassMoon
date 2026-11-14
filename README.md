@@ -115,6 +115,8 @@ uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call agent.moon
 
 Start each publisher in a separate terminal. The Python file exports a `TOOLS` mapping with a description, JSON Schema, and a synchronous or asynchronous handler for each function. The MCP bridge keeps one initialized session open and publishes its tool catalog through the same interface.
 
+For a reviewed Python entry point, pass its `--sha256 DIGEST` to the publisher. It checks the file before executing the exact bytes it hashed. Combine this with `--staged` to probe the resulting generation before activation.
+
 ```sh
 uv run --locked python -m glassmoon.toolbox --socket "$GLASSMOON_SOCKET" \
   --name tools.moon examples/moon_tools.py
