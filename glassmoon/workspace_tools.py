@@ -274,19 +274,21 @@ class Workspace:
     def update(self, name, params, path):
         revision = params["revision"]
         if name == "write_file" and revision == "":
-            # Exclusive creation prevents overwriting a file added after a model's read.
             data = params["text"].encode()
             if len(data) > FILE_LIMIT:
                 raise fail(
                     "file_too_large", "File exceeds the workspace tool size limit"
                 )
+            fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".glassmoon-edit-")
             try:
-                with path.open("xb") as file:
+                with os.fdopen(fd, "wb") as file:
                     file.write(data)
+                # Publish complete bytes without replacing a concurrently created file.
+                os.link(temporary, path)
             except FileExistsError:
-                raise fail(
-                    "revision_changed", "The file already exists. Read it first."
-                ) from None
+                raise fail("revision_changed", "The file already exists. Read it first.") from None
+            finally:
+                Path(temporary).unlink(missing_ok=True)
             return {"revision": hashlib.sha256(data).hexdigest()}
 
         text, current, mode = self.read(path)
