@@ -452,3 +452,19 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(terminal.more_tasks(), terminal.more_tasks())
         observed = [line.split()[0] for line in terminal.windows["status"] if "outcome unknown" in line]
         self.assertEqual(observed, list(reversed(ids)))
+
+    def test_cancel_unclaimed_task_without_disrupting_an_admitted_worker(self):
+        task = self.rpc("submit", **TASK)
+        options = {
+            "id": task["id"], "expected_revision": task["revision"],
+            "action": "cancel", "note": "No longer needed",
+        }
+        result = self.rpc("review", **options)
+        self.assertEqual((result["status"], result["attempts"]), ("cancelled", 0))
+        self.assertIsNone(self.rpc("claim", agent="tide", lease_seconds=10)["task"])
+        task = self.rpc("submit", **(TASK | {"key": "next"}))
+        running = self.rpc("claim", agent="tide", lease_seconds=10)["task"]
+        with self.assertRaises(RequestError) as blocked:
+            self.rpc("review", **(options | {"id": task["id"], "expected_revision": running["revision"]}))
+        self.assertEqual(blocked.exception.code, "revision_conflict")
+        self.assertEqual(self.rpc("get", id=task["id"])["status"], "running")

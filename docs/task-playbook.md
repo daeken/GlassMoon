@@ -12,6 +12,8 @@
 - `/reconcile ID` — recover a completed agent receipt for a task awaiting review.
 - `/resolve ID REVISION ACTION NOTE` — record an explicit resolution after checking the task effects.
 
+For a queued task with zero attempts, use `/resolve ID REVISION cancel NOTE` to withdraw it before delivery. If an agent claims it first, read the new state before taking further action.
+
 ## Review a run
 
 Find the parent task with `/tasks`, then open `/task ID` and `/children ID`. Use `/timeline ID` on the relevant child. For example, if Moon asks Finch to extract Markdown headings, the timeline can show that the headings tool returned. Finch's recorded reply contains the heading text. When a task needs review, check its durable receipt with `/reconcile ID` and verify any remaining effects before recording a resolution.

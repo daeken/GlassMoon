@@ -35,7 +35,7 @@ TOOLS = {
         {"id": TEXT}, {"before": INTEGER},
     ),
     "review": tool(
-        "Resolve an interrupted task. Choose requeue, cancel, or verified after checking its effects.",
+        "Resolve an interrupted task after checking its effects, or cancel an unclaimed task.",
         {"id": TEXT, "action": TEXT, "note": TEXT, "expected_revision": INTEGER},
     ),
     "reconcile": tool(
@@ -396,7 +396,8 @@ class Mailbox:
             """
             UPDATE tasks SET status=?, review_note=?, result=COALESCE(?, result),
                              revision=revision+1, updated_at=?
-            WHERE id=? AND status='review' AND revision=?
+            WHERE id=? AND revision=?
+              AND (status='review' OR (status='queued' AND attempts=0 AND ?='cancel'))
             RETURNING attempts
         """,
             (
@@ -406,6 +407,7 @@ class Mailbox:
                 now,
                 id,
                 expected_revision,
+                action,
             ),
         ).fetchone()
         if task is None:
