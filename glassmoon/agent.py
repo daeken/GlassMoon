@@ -264,6 +264,8 @@ class Agent:
                 raise fail("duplicate_tool_call", "The provider reused a tool call ID")
             used_ids.update(ids)
             requirements.update(provider=reply["provider"], model=reply["model"])
+            if "provider_generation" in reply:
+                requirements["provider_generation"] = reply["provider_generation"]
             exchange = {
                 "calls": announced,
                 "outputs": {},

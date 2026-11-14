@@ -5,15 +5,40 @@ import tempfile
 import unittest
 from contextlib import AsyncExitStack
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from glassmoon.ipc import RequestError, call
 from glassmoon.models import CATALOG, GENERATE
+from glassmoon.provider_router import Router
 from glassmoon.service import serve
 
 BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class RoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_generation_change_rejects_continuation(self):
+        router = Router("unused")
+        active = {
+            "provider": "fixture", "provider_generation": 11, "id": "model",
+            "interface_version": 1, "input_modalities": ["text"],
+            "output_modalities": ["text"], "context_tokens": 1_000, "streaming": True,
+        }
+        params = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "provider": "fixture", "model": "model",
+        }
+        catalog = AsyncMock(return_value=([active], []))
+        invoke = AsyncMock(return_value={"message": {"role": "assistant", "content": "ready"}})
+        with patch.object(router, "models", catalog), patch("glassmoon.provider_router.call", invoke):
+            reply = await router.handle("generate", params, None, False)
+            self.assertEqual(reply["provider_generation"], 11)
+            self.assertEqual(invoke.await_args.kwargs["generation"], 11)
+            active["provider_generation"] = 12
+            with self.assertRaises(RequestError) as changed:
+                await router.handle("generate", params | {"provider_generation": 11}, None, False)
+            self.assertEqual(changed.exception.code, "provider_changed")
+            invoke.assert_awaited_once()
+
     async def process(self, stack, *args):
         process = await asyncio.create_subprocess_exec(
             *args, stdout=asyncio.subprocess.PIPE

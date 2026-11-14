@@ -147,6 +147,7 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=[
                     {
                         "provider": "openai",
+                        "provider_generation": 53,
                         "model": "test",
                         "tool_calls": [call],
                         "message": {"role": "assistant", "content": ""},
@@ -165,6 +166,7 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 "", "mcp.math", "add", {"a": 12, "b": 30}, generation=14
             )
             exchange = generate.await_args.args[3]["tool_history"][0]
+            self.assertEqual(generate.await_args.args[3]["provider_generation"], 53)
             self.assertEqual(
                 json.loads(exchange["outputs"]["tool1"])["value"]["structuredContent"][
                     "result"

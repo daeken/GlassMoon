@@ -28,6 +28,7 @@ METHODS = {
             "output_modalities": ARRAY,
             "min_context_tokens": INTEGER,
             "provider": TEXT,
+            "provider_generation": INTEGER,
             "model": TEXT,
             "tool_images": BOOLEAN,
             **functions.TOOL_FIELDS,
@@ -50,6 +51,7 @@ class Router:
                     "models",
                     {},
                     version=service["interface_version"],
+                    generation=service["generation"],
                 )
             entries = [capabilities(model) for model in result["models"]]
         except (
@@ -66,7 +68,11 @@ class Router:
             return [], provider
         return [
             entry
-            | {"provider": provider, "interface_version": service["interface_version"]}
+            | {
+                "provider": provider,
+                "provider_generation": service["generation"],
+                "interface_version": service["interface_version"],
+            }
             for entry in entries
         ], None
 
@@ -103,6 +109,11 @@ class Router:
         outputs = modalities(params.get("output_modalities", ["text"]))
         tools = functions.definitions(params)
         rounds = functions.history(params)
+        generation = params.get("provider_generation")
+        if generation is not None and (
+            type(generation) is not int or generation <= 0 or not params.get("provider")
+        ):
+            raise fail("invalid_provider_generation", "Specify a provider and positive generation")
         images = params.get("tool_images", False)
         if type(images) is not bool:
             raise fail("invalid_tool_images", "tool_images must be a boolean")
@@ -125,6 +136,11 @@ class Router:
             )
 
         models, _ = await self.models()
+        if generation is not None and not any(
+            item["provider"] == params["provider"] and item["provider_generation"] == generation
+            for item in models
+        ):
+            raise fail("provider_changed", "The selected provider generation is no longer available")
         selected = next(
             (
                 item
@@ -133,6 +149,7 @@ class Router:
                     not params.get("provider") or item["provider"] == params["provider"]
                 )
                 and (not params.get("model") or item["id"] == params["model"])
+                and (generation is None or item["provider_generation"] == generation)
                 and inputs <= set(item["input_modalities"])
                 and outputs <= set(item["output_modalities"])
                 and item["context_tokens"] >= min_context
@@ -179,8 +196,13 @@ class Router:
                 "generate",
                 request,
                 version=selected["interface_version"],
+                generation=selected["provider_generation"],
                 on_chunk=forward if stream else None,
             )
+        except RequestError as error:
+            if error.code == "generation_unavailable" and error.generation is None:
+                raise fail("provider_changed", "The selected provider generation changed") from None
+            raise
         except (OSError, EOFError):
             raise fail(
                 "provider_unavailable", f"Connection to {provider} ended"
@@ -199,7 +221,12 @@ class Router:
                 "Provider returned an unexpected role or modality",
             )
         return within_reply_limit(
-            result | {"message": reply, "model": selected["id"], "provider": provider}
+            result | {
+                "message": reply,
+                "model": selected["id"],
+                "provider": provider,
+                "provider_generation": selected["provider_generation"],
+            }
         )
 
 

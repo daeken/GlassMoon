@@ -97,6 +97,8 @@ Register a service with `kind: "model_provider"` and expose the `models` and `ge
 
 All services on this local socket are trusted. If multiple model providers can serve an agent, each selected provider can receive the agent's recent transcript. Pin the provider to restrict where that transcript goes.
 
+When a provider asks an agent to use tools, the continuation goes back to the same provider generation. A provider replaced mid-turn can return `provider_changed`. Review any tool effects before trying the task again.
+
 ## Bootstrap development inside GlassMoon
 
 Agent state keeps the full transcript in SQLite and a separate summary of older complete turns. Agents compact automatically when their unsummarized transcript grows. Use `/compact` in an agent chat or the `compact` RPC to request it explicitly. Use `info` to inspect the covered revision.
