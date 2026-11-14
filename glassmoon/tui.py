@@ -292,6 +292,8 @@ class Terminal:
             generation = f"  #{status['generation']}" if "generation" in status else ""
             if status["state"] == "over_limit":
                 detail = f"skipped, {status['count']} tools with {status['available_slots']} slots left"
+            elif status["state"] == "missing_selection":
+                detail = "skipped, missing selected tools " + ", ".join(status["missing"])
             else:
                 detail = f"{status['state']}  {status['count']} tools"
             self.log(window, f"{service}  {detail}{generation}")

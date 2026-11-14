@@ -437,6 +437,34 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 42,
             )
 
+    async def test_agent_selects_shared_tools_before_enforcing_catalog_capacity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            agent = Agent(
+                "", "moon", "models", {}, "", store, tool_services=["many"],
+                tool_selections={"many": {"tool_33"}},
+            )
+            sizes = [34, 33]
+
+            async def catalog(*_):
+                return 5, [
+                    {
+                        "name": f"tool_{i}", "description": "Tool", "parameters": {"type": "object"},
+                        "returns_image": i == 0,
+                    }
+                    for i in range(sizes.pop(0))
+                ]
+
+            with patch("glassmoon.agent.tool_catalog", side_effect=catalog):
+                status = await agent.handle("tool_status", {}, ignore, False)
+                missing = await agent.handle("tool_status", {}, ignore, False)
+            self.assertEqual(status["tools"], [
+                {"name": "many__tool_33", "service": "many", "returns_image": False},
+            ])
+            self.assertEqual(missing["tools"], [])
+            self.assertEqual(missing["services"]["many"]["missing"], ["tool_33"])
+
     async def test_agent_reports_catalog_capacity_separately_from_outages(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))

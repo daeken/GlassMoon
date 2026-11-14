@@ -119,6 +119,7 @@ class Agent:
         workspace=None,
         tool_services=(),
         self_tools=(),
+        tool_selections=None,
     ):
         self.socket = socket
         self.identity = identity
@@ -130,6 +131,7 @@ class Agent:
         self.workspace = workspace
         self.tool_services = tuple(dict.fromkeys(tool_services))
         self.self_tools = tuple(dict.fromkeys(self_tools))
+        self.tool_selections = tool_selections or {}
 
     def model_preference(self, saved=None):
         if saved is None:
@@ -210,6 +212,21 @@ class Agent:
                 if catalog is None:
                     raise fail("tool_unavailable", "Tool catalog could not be read")
                 generation, remote = catalog
+                selected = self.tool_selections.get(service)
+                if selected is not None:
+                    remote = [tool for tool in remote if tool.get("name") in selected]
+                    missing = sorted(selected - {tool["name"] for tool in remote})
+                    if missing:
+                        status[service] = {
+                            "state": "missing_selection", "count": 0, "generation": generation,
+                            "missing": missing,
+                        }
+                        if stream:
+                            await emit({
+                                "type": "status",
+                                "message": f"Tool service {service} is missing a selected tool.",
+                            })
+                        continue
                 image_names = {
                     tool["name"] for tool in remote if tool.get("returns_image") is True
                 }
@@ -641,6 +658,7 @@ async def run(args):
             else None,
             args.tool_service,
             args.configurable_tool_service,
+            args.tool_selections,
         )
         await serve(
             args.socket,
@@ -686,6 +704,10 @@ def main():
         help="Allow the agent to change its membership in this named tool service",
     )
     parser.add_argument(
+        "--select-tool", action="append", default=[], metavar="SERVICE:TOOL",
+        help="Limit a shared service to the named function. Repeat to select more functions.",
+    )
+    parser.add_argument(
         "--workspace", help="Directory where the agent can read and edit files"
     )
     parser.add_argument(
@@ -703,6 +725,16 @@ def main():
     )
     try:
         args = parser.parse_args()
+        args.tool_selections = {}
+        for selection in args.select_tool:
+            service, marker, name = selection.partition(":")
+            if (
+                not marker or not re.fullmatch(r"[A-Za-z0-9_.-]{1,61}", service)
+                or not re.fullmatch(r"[A-Za-z0-9_-]+", name)
+                or len(service) + len(name) + 2 > 64
+            ):
+                parser.error("--select-tool expects SERVICE:TOOL within the function name limit")
+            args.tool_selections.setdefault(service, set()).add(name)
         if args.min_context_tokens < 1:
             parser.error("--min-context-tokens must be positive")
         if args.staged and args.replace is not None:

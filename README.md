@@ -146,6 +146,8 @@ In an agent's TUI window, use `/tool enable SERVICE` or `/tool disable SERVICE` 
 
 Each turn can expose up to 32 tools. If a service's catalog would exceed the remaining slots, `/tools` shows its size and the number of slots left.
 
+Use `--select-tool SERVICE:TOOL` to expose selected functions from a configured tool service. Repeat for each function you want that agent to use. The selection applies when the service is enabled, including when enabled from the TUI. `/tools` reports a selection that is missing from the current worker generation.
+
 Pass `--configurable-tool-service SERVICE` to let the agent manage that service with `configure_shared_tool`. Repeat the option for additional services. The tool shows the approved names and current revision, and applies changes on the next turn. Explicit operator settings take precedence. Removing a name from the approved list ends any agent override for that service while the name is absent.
 
 Launch or replace an agent with `--tool-service tools.moon --tool-service mcp.math`. It discovers the current tools before each turn and sees them as `tools_moon__text_budget` and `mcp_math__multiply`. The same tools are callable from Python, including an agent's `python_eval`.
