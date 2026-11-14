@@ -35,7 +35,10 @@ TOOLS = {
         "Find literal, case-sensitive text in one UTF-8 workspace file. "
         "Returns matching line numbers, character columns, and excerpts. To continue, pass next as after_line and include revision.",
         {"path": TEXT, "query": TEXT},
-        {"after_line": INTEGER, "revision": TEXT},
+        {
+            "after_line": INTEGER | {"description": "Use 0 for a new search."},
+            "revision": TEXT | {"description": "Use an empty string for a new search."},
+        },
     ),
     "write_file": method(
         "Create a UTF-8 file or replace it at the revision returned by read_file. "
@@ -180,7 +183,7 @@ class Workspace:
         if after_line < 0:
             raise fail("invalid_cursor", "Use the next line cursor returned by find_in_file")
         text, current_revision, _ = self.read(path)
-        if revision is not None and revision != current_revision:
+        if revision and revision != current_revision:
             raise fail("revision_changed", "The file changed. Restart the search.")
         matches = []
         for number, line in enumerate(text.split("\n"), 1):

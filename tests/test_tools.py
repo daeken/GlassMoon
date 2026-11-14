@@ -57,7 +57,7 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             file.write_text("skip\n" + "猫" * 220 + "needle\n" + "needle twice needle\n" * 12)
             workspace = Workspace(directory, read_only=True)
             args = {"path": file.name, "query": "needle"}
-            first = await workspace.execute(tool("find_in_file", **args))
+            first = await workspace.execute(tool("find_in_file", **args, after_line=0, revision=""))
             self.assertEqual(first["matches"][0], {
                 "line": 2, "column": 221, "excerpt": "…" + "猫" * 40 + "needle",
             })
