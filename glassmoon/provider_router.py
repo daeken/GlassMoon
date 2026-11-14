@@ -6,6 +6,7 @@ from . import functions
 from .ipc import ProtocolError, RequestError, call, connect
 from .models import (
     ARRAY,
+    BOOLEAN,
     GENERATE,
     INTEGER,
     TEXT,
@@ -28,6 +29,7 @@ METHODS = {
             "min_context_tokens": INTEGER,
             "provider": TEXT,
             "model": TEXT,
+            "tool_images": BOOLEAN,
             **functions.TOOL_FIELDS,
         },
     ),
@@ -101,6 +103,14 @@ class Router:
         outputs = modalities(params.get("output_modalities", ["text"]))
         tools = functions.definitions(params)
         rounds = functions.history(params)
+        images = params.get("tool_images", False)
+        if type(images) is not bool:
+            raise fail("invalid_tool_images", "tool_images must be a boolean")
+        images |= any(
+            isinstance(output, list)
+            for exchange in rounds
+            for output in exchange["outputs"].values()
+        )
         if rounds and (
             not tools or not params.get("provider") or not params.get("model")
         ):
@@ -128,6 +138,13 @@ class Router:
                 and item["context_tokens"] >= min_context
                 and (not stream or item["streaming"])
                 and (not tools or item.get("tool_calls", False))
+                and (
+                    not images
+                    or (
+                        item.get("tool_images", False)
+                        and "image" in item["input_modalities"]
+                    )
+                )
             ),
             None,
         )

@@ -97,10 +97,20 @@ def tool_input(exchange):
             {
                 "type": "function_call_output",
                 "call_id": call["id"],
-                "output": exchange["outputs"][call["id"]],
+                "output": openai_tool_output(exchange["outputs"][call["id"]]),
             }
             for call in exchange["calls"]
         ),
+    ]
+
+
+def openai_tool_output(output):
+    if isinstance(output, str):
+        return output
+    text, image = output
+    return [
+        {"type": "input_text", "text": text["text"]},
+        {"type": "input_image", "image_url": image["url"], "detail": "auto"},
     ]
 
 

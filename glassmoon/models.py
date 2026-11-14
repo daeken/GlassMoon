@@ -34,6 +34,7 @@ CAPABILITY = {
         "max_output_tokens": {"type": "integer", "minimum": 1},
         "streaming": BOOLEAN,
         "tool_calls": BOOLEAN,
+        "tool_images": BOOLEAN,
     },
     "required": [
         "id",
@@ -83,8 +84,9 @@ def capabilities(model):
             raise fail("invalid_model", f"{key} must be a positive integer")
     if type(model.get("streaming")) is not bool:
         raise fail("invalid_model", "streaming must be a boolean")
-    if "tool_calls" in model and type(model["tool_calls"]) is not bool:
-        raise fail("invalid_model", "tool_calls must be a boolean")
+    for key in ("tool_calls", "tool_images"):
+        if key in model and type(model[key]) is not bool:
+            raise fail("invalid_model", f"{key} must be a boolean")
     return model
 
 

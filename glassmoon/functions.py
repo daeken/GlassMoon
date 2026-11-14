@@ -7,6 +7,30 @@ from .service import fail
 TOOL_FIELDS = {"tools": {"type": "array"}, "tool_history": {"type": "array"}}
 
 
+DATA_IMAGE = re.compile(r"data:image/(?:jpeg|png);base64,[a-zA-Z0-9+/]+={0,2}")
+
+
+def image_part(value):
+    return (
+        isinstance(value, dict)
+        and value.get("type") == "image"
+        and isinstance(value.get("url"), str)
+        and len(value["url"]) <= 29_000
+        and DATA_IMAGE.fullmatch(value["url"]) is not None
+    )
+
+
+def valid_output(value):
+    return isinstance(value, str) or (
+        isinstance(value, list)
+        and len(value) == 2
+        and isinstance(value[0], dict)
+        and value[0].get("type") == "text"
+        and isinstance(value[0].get("text"), str)
+        and image_part(value[1])
+    )
+
+
 def definitions(params):
     tools = params.get("tools", [])
     if not isinstance(tools, list) or len(tools) > 32:
@@ -69,10 +93,10 @@ def history(params):
             or not isinstance(exchange.get("state", {}), dict)
             or not isinstance(outputs, dict)
             or set(outputs) != {call["id"] for call in announced}
-            or any(not isinstance(value, str) for value in outputs.values())
+            or any(not valid_output(value) for value in outputs.values())
         ):
             raise fail(
                 "invalid_tool_history",
-                "Each function call needs exactly one string result",
+                "Each function call needs one text or image result",
             )
     return rounds

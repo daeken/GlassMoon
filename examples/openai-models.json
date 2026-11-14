@@ -7,7 +7,8 @@
       "context_tokens": 1050000,
       "max_output_tokens": 128000,
       "streaming": true,
-      "tool_calls": true
+      "tool_calls": true,
+      "tool_images": true
     }
   ]
 }

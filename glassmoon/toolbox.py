@@ -28,6 +28,11 @@ def validate_name(name):
 class ToolService:
     def __init__(self, functions, invoke):
         self.functions = {validate_name(name): spec for name, spec in functions.items()}
+        if any(
+            type(spec.get("returns_image", False)) is not bool
+            for spec in self.functions.values()
+        ):
+            raise ValueError("returns_image must be a boolean")
         self.invoke = invoke
 
     async def handle(self, name, params, _emit, _stream):
@@ -38,6 +43,9 @@ class ToolService:
                         "name": key,
                         "description": spec["description"],
                         "parameters": spec["parameters"],
+                        **(
+                            {"returns_image": True} if spec.get("returns_image") else {}
+                        ),
                     }
                     for key, spec in self.functions.items()
                 ]
@@ -102,7 +110,14 @@ def main():
         )
     except KeyboardInterrupt:
         return 130
-    except (RequestError, ProtocolError, EOFError, OSError, TypeError, ValueError) as error:
+    except (
+        RequestError,
+        ProtocolError,
+        EOFError,
+        OSError,
+        TypeError,
+        ValueError,
+    ) as error:
         parser.exit(1, f"{error}\n")
     return 0
 

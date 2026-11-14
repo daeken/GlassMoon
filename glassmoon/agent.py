@@ -89,10 +89,14 @@ class Agent:
     async def discover_tools(self, emit, stream):
         definitions = list(self.workspace.definitions) if self.workspace else []
         routes = {}
+        images = set()
         for service in self.tool_services:
             try:
                 async with asyncio.timeout(5):
                     remote = await list_tools(self.socket, service)
+                image_names = {
+                    tool["name"] for tool in remote if tool.get("returns_image") is True
+                }
                 additions = {}
                 current = {item["name"] for item in definitions}
                 for tool in functions.definitions({"tools": remote}):
@@ -110,6 +114,11 @@ class Agent:
                 routes.update(
                     (name, (service, tool["name"])) for name, tool in additions.items()
                 )
+                images.update(
+                    name
+                    for name, tool in additions.items()
+                    if tool["name"] in image_names
+                )
             except (
                 RequestError,
                 ProtocolError,
@@ -118,6 +127,7 @@ class Agent:
                 TimeoutError,
                 KeyError,
                 TypeError,
+                AttributeError,
             ):
                 if stream:
                     await emit(
@@ -126,7 +136,7 @@ class Agent:
                             "message": f"Tool service {service} unavailable or invalid.",
                         }
                     )
-        return definitions, routes
+        return definitions, routes, images
 
     async def execute(self, item, routes):
         if item["name"] in routes:
@@ -149,8 +159,10 @@ class Agent:
         }
 
     async def generate(self, history, user, emit, stream, summary=""):
-        definitions, routes = await self.discover_tools(emit, stream)
+        definitions, routes, images = await self.discover_tools(emit, stream)
         requirements = self.requirements.copy()
+        if images:
+            requirements["tool_images"] = True
         rounds = []
         used_ids = set()
         for _ in range(MAX_TOOL_ROUNDS + 1):
@@ -207,7 +219,27 @@ class Agent:
                         {"type": "tool", "name": item["name"], "phase": "started"}
                     )
                 result = await self.execute(item, routes)
-                exchange["outputs"][item["id"]] = json.dumps(result, ensure_ascii=False)
+                value = result.get("value")
+                if (
+                    item["name"] in images
+                    and isinstance(value, dict)
+                    and functions.image_part(value.get("image"))
+                ):
+                    image = value["image"]
+                    for old in rounds:
+                        for key, prior in old["outputs"].items():
+                            if isinstance(prior, list):
+                                old["outputs"][key] = (
+                                    prior[0]["text"] + " (Earlier screenshot omitted.)"
+                                )
+                    metadata = json.dumps(
+                        {key: val for key, val in value.items() if key != "image"},
+                        ensure_ascii=False,
+                    )
+                    output = [{"type": "text", "text": metadata}, image]
+                else:
+                    output = json.dumps(result, ensure_ascii=False)
+                exchange["outputs"][item["id"]] = output
                 if stream:
                     await emit(
                         {
