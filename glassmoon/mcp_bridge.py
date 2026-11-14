@@ -38,12 +38,12 @@ class Bridge:
 
         return Client(transport(), read_timeout_seconds=MCP_TIMEOUT)
 
-    async def tools(self, client):
+    async def tools(self, client, *, refresh=False):
         async with asyncio.timeout(MCP_TIMEOUT):
             cursor = None
             tools = {}
             for _ in range(32):
-                page = await client.list_tools(cursor=cursor)
+                page = await client.list_tools(cursor=cursor, cache_mode="refresh" if refresh else "use")
                 for tool in page.tools:
                     tools[tool.name] = {
                         "description": tool.description or tool.name,
@@ -57,7 +57,7 @@ class Bridge:
 
     async def check_catalog(self, client, registered):
         try:
-            current = await self.tools(client)
+            current = await self.tools(client, refresh=True)
         except Exception as error:  # noqa: BLE001 - upstream failures can contain connection details.
             raise fail("mcp_catalog_unavailable", f"Could not read the MCP catalog ({type(error).__name__})") from None
         changes = {
