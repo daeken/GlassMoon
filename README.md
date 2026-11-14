@@ -157,6 +157,19 @@ GLASSMOON_SCRATCHPAD_PATH="/absolute/path/scratchpad.sqlite3" \
   --name tools.scratchpad examples/moon_scratchpad.py
 ```
 
+### Queue work for an agent
+
+Run the task mailbox and dispatcher in separate terminals. An agent can submit work through `--tool-service tools.mailbox`; a dispatcher delivers it when the named recipient is running.
+
+```sh
+uv run --locked python -m glassmoon.mailbox --socket "$GLASSMOON_SOCKET" --state /absolute/path/tasks.sqlite3
+uv run --locked python -m glassmoon.dispatcher --socket "$GLASSMOON_SOCKET" --agent moon --agent tide
+```
+
+`submit` takes a sender, recipient agent name, idempotency key, and task text. The same sender, key, and task return the existing task ID. Use `/tasks [AGENT]` and `/task ID` in the TUI to see delivery state and the recorded reply. A `done` task has a saved reply from the recipient. The reply describes the agent's outcome and any blockers.
+
+A dispatcher claims each task with a renewable lease. An expired lease or ambiguous delivery moves the task to `review`. Check the work's effects before calling the mailbox's `review` operation with the current task revision, a note, and `requeue` or `cancel`. The mailbox is shared among trusted broker clients.
+
 ### Supervise a local worker
 
 Moon wrote the `moon.text` example service, which fingerprints UTF-8 text and exposes a deterministic health probe. The supervisor starts a worker, validates probe fields, restarts it after repeated failures or process exit, and can send an incident to a named maintainer agent.

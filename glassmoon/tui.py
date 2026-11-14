@@ -10,6 +10,7 @@ from collections import deque
 
 from .ipc import ProtocolError, RequestError, call, connect
 from .models import result_text
+from .toolbox import call_tool
 
 
 def terminal_text(value):
@@ -22,9 +23,10 @@ def terminal_text(value):
 
 
 class Terminal:
-    def __init__(self, screen, socket):
+    def __init__(self, screen, socket, mailbox="tools.mailbox"):
         self.screen = screen
         self.socket = socket
+        self.mailbox = mailbox
         self.windows = {"status": deque(maxlen=500)}
         self.active = "status"
         self.services = {}
@@ -175,6 +177,27 @@ class Terminal:
                 window, f"{tool['name']}{'  [image]' if tool['returns_image'] else ''}"
             )
 
+    async def list_tasks(self, agent):
+        params = {"agent": agent} if agent else {}
+        response = await call_tool(self.socket, self.mailbox, "list_tasks", params)
+        if not response["tasks"]:
+            self.log("status", "No tasks.")
+        for row in response["tasks"]:
+            self.log(
+                "status",
+                f"{row['id']}  {row['status']}  {row['sender']} → {row['agent']}  {row['key']}",
+            )
+
+    async def show_task(self, identifier):
+        task = await call_tool(self.socket, self.mailbox, "get", {"id": identifier})
+        self.log(
+            "status", f"{task['id']}  {task['status']}  revision {task['revision']}"
+        )
+        self.log("status", task["task"])
+        for field in ("result", "review_note"):
+            if task[field]:
+                self.log("status", task[field])
+
     def start(self, operation, window="status"):
         async def run():
             try:
@@ -220,6 +243,7 @@ class Terminal:
                         self.active,
                         "F2 switches windows. Page Up and Page Down scroll. // sends a slash.",
                     )
+                    self.log(self.active, "/tasks [AGENT]  /task ID")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -228,6 +252,12 @@ class Terminal:
                 case "/tools" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.tool_status(window), window)
+                case "/tasks":
+                    self.select("status")
+                    self.start(lambda: self.list_tasks(argument.removeprefix("agent.")))
+                case "/task" if argument:
+                    self.select("status")
+                    self.start(lambda: self.show_task(argument))
                 case "/services":
                     self.select("status")
                     self.start(self.list_services)
@@ -387,10 +417,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", required=True)
     parser.add_argument("--query", help="Open an agent chat on startup")
+    parser.add_argument(
+        "--mailbox", default="tools.mailbox", help="Task service for /tasks and /task"
+    )
     args = parser.parse_args()
     try:
         curses.wrapper(
-            lambda screen: asyncio.run(Terminal(screen, args.socket).run(args.query))
+            lambda screen: asyncio.run(
+                Terminal(screen, args.socket, args.mailbox).run(args.query)
+            )
         )
     except KeyboardInterrupt:
         return 130
