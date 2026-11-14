@@ -16,6 +16,11 @@ TOOLS = {
     "screenshot": tool(
         "Capture the macOS main display at the current screenshot coordinate scale."
     ),
+    "windows": tool("List visible window IDs for the configured macOS app."),
+    "window_screenshot": tool(
+        "Capture a window from the configured app. Use a window ID from windows.",
+        {"window_id": INTEGER},
+    ),
     "click": tool(
         "Click at coordinates from the latest main display screenshot.",
         {"x": INTEGER, "y": INTEGER},
@@ -31,17 +36,24 @@ TOOLS = {
     ),
 }
 TOOLS["screenshot"]["returns_image"] = True
+TOOLS["window_screenshot"]["returns_image"] = True
+CAPTURE_TOOLS = ("status", "screenshot", "windows", "window_screenshot")
 
 
 class Desktop:
-    def __init__(self, helper, allow_input, target_pid=None):
+    def __init__(self, helper, allow_input, target_pid=None, window_capture=False):
         self.helper = helper
         self.allow_input = allow_input
         self.target_pid = target_pid
+        self.window_capture = window_capture
         self.lock = asyncio.Lock()
 
     async def invoke(self, action, args):
-        if action not in ("status", "screenshot") and not self.allow_input:
+        if action in ("windows", "window_screenshot") and not self.window_capture:
+            raise fail("window_capture_disabled", "Start the desktop service with --window-capture")
+        if action == "screenshot" and self.window_capture:
+            raise fail("display_capture_disabled", "Use window_screenshot for the selected app")
+        if action not in CAPTURE_TOOLS and not self.allow_input:
             raise fail("input_disabled", "Start the desktop service with --allow-input")
         async with self.lock:
             process = await asyncio.create_subprocess_exec(
@@ -86,6 +98,7 @@ def main():
         action="store_true",
         help="Expose real desktop mouse and keyboard actions",
     )
+    parser.add_argument("--window-capture", action="store_true", help="Expose capture of the configured app's windows")
     parser.add_argument(
         "--target-pid",
         type=int,
@@ -94,15 +107,20 @@ def main():
     args = parser.parse_args()
     if args.target_pid is not None and not 1 <= args.target_pid <= 2_147_483_647:
         parser.error("--target-pid must be a valid macOS process ID")
+    if args.window_capture and args.target_pid is None:
+        parser.error("--window-capture requires --target-pid")
+    if args.window_capture and args.allow_input:
+        parser.error("Use --window-capture for a read-only worker")
     try:
         bridge = Desktop(
-            args.helper.resolve(strict=True), args.allow_input, args.target_pid
+            args.helper.resolve(strict=True), args.allow_input, args.target_pid, args.window_capture
         )
-        tools = (
-            TOOLS
-            if args.allow_input
-            else {name: TOOLS[name] for name in ("status", "screenshot")}
-        )
+        tools = {
+            name: spec for name, spec in TOOLS.items()
+            if (args.allow_input or name in CAPTURE_TOOLS)
+            and (name not in ("windows", "window_screenshot") or args.window_capture)
+            and (name != "screenshot" or not args.window_capture)
+        }
         service = ToolService(tools, bridge.invoke)
         asyncio.run(
             serve(

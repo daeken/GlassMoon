@@ -62,6 +62,25 @@ func requireTarget(_ pid: Int, at point: CGPoint) throws {
     }
 }
 
+func capture(_ filter: SCContentFilter, width: Int, height: Int) async throws -> [String: Any] {
+    let config = SCStreamConfiguration()
+    config.width = width
+    config.height = height
+    config.showsCursor = false
+    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    let bitmap = NSBitmapImageRep(cgImage: image)
+    for quality in [0.60, 0.36, 0.20, 0.10, 0.05] {
+        if let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality]),
+           jpeg.count <= 21000 {
+            return [
+                "width": width, "height": height,
+                "image": ["type": "image", "url": "data:image/jpeg;base64," + jpeg.base64EncodedString()]
+            ]
+        }
+    }
+    throw DesktopError("image_too_large", "Screenshot exceeds the IPC image budget")
+}
+
 @main
 struct Desktop {
     static func main() async {
@@ -104,22 +123,38 @@ struct Desktop {
                 throw DesktopError("display_unavailable", "Cannot find the main display")
             }
             let filter = SCContentFilter(display: display, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            config.width = width
-            config.height = height
-            config.showsCursor = false
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            let bitmap = NSBitmapImageRep(cgImage: image)
-            for quality in [0.60, 0.36, 0.20, 0.10, 0.05] {
-                if let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality]),
-                   jpeg.count <= 21000 {
-                    return [
-                        "width": width, "height": height, "display": Int(displayID),
-                        "image": ["type": "image", "url": "data:image/jpeg;base64," + jpeg.base64EncodedString()]
-                    ]
-                }
+            var result = try await capture(filter, width: width, height: height)
+            result["display"] = Int(displayID)
+            return result
+        case "windows", "window_screenshot":
+            let pid = try integer(args, "target_pid")
+            guard pid > 0, pid <= Int(Int32.max) else {
+                throw DesktopError("invalid_target", "Configure a macOS process ID for window capture")
             }
-            throw DesktopError("image_too_large", "Display screenshot exceeds the IPC image budget")
+            guard CGPreflightScreenCaptureAccess() else {
+                throw DesktopError("screen_recording_required", "Allow Screen Recording for the GlassMoon desktop launcher in macOS Settings")
+            }
+            let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            let windows = content.windows.filter { window in
+                window.owningApplication?.processID == pid_t(pid) && window.windowLayer == 0
+                    && window.frame.width > 1 && window.frame.height > 1
+            }
+            if action == "windows" {
+                return ["windows": windows.prefix(30).map { window in
+                    ["id": Int(window.windowID), "title": String((window.title ?? "").prefix(200)),
+                     "width": Int(window.frame.width), "height": Int(window.frame.height)] as [String: Any]
+                }]
+            }
+            let id = try integer(args, "window_id")
+            guard let window = windows.first(where: { Int($0.windowID) == id }) else {
+                throw DesktopError("window_unavailable", "The selected window is unavailable for this app")
+            }
+            let scale = min(1, 640 / max(window.frame.width, window.frame.height))
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            var result = try await capture(filter, width: max(1, Int(window.frame.width * scale)),
+                                           height: max(1, Int(window.frame.height * scale)))
+            result["window_id"] = Int(window.windowID)
+            return result
         case "click", "type_text", "press", "scroll":
             guard CGPreflightPostEventAccess() else {
                 throw DesktopError("accessibility_required", "Allow Accessibility for the GlassMoon desktop launcher in macOS Settings")

@@ -198,6 +198,8 @@ uv run --locked python -m glassmoon.desktop --socket "$GLASSMOON_SOCKET"
 
 The desktop service captures the main display, including other visible apps. The helper reports the macOS Screen Recording and Accessibility permissions. Start the service with `--allow-input` to publish native clicks, typing, keypresses, and scrolling. Add `--target-pid PID` to require that app to be frontmost and keep pointer actions within its visible windows. Coordinate actions use the main-display screenshot dimensions. Text insertion uses the focused control’s Accessibility interface and requires that the control expose editable selected text. Attach the service to an agent with `--tool-service desktop`.
 
+For a read-only worker scoped to one app, start it with `--window-capture --target-pid PID`. Call `windows` for that app's visible window IDs, then `window_screenshot` for the selected window. [ScreenCaptureKit window filter](https://developer.apple.com/documentation/screencapturekit/sccontentfilter/init%28desktopindependentwindow%3A%29)
+
 ### Keep shared working notes
 
 Moon's scratchpad stores revisioned notes in SQLite. Use a dedicated absolute database path and add `--tool-service tools.scratchpad` to agents that should share it.
