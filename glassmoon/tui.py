@@ -340,6 +340,8 @@ class Terminal:
         self.log("status", task["task"])
         if task.get("parent"):
             self.log("status", f"Parent task {task['parent']}")
+        for reference in task.get("evidence", []):
+            self.log("status", f"Evidence /evidence {reference['owner']} {reference['key']}")
         if task.get("recovery_check"):
             self.log("status", f"Recovery check from submitter — {task['recovery_check']}")
         if task["status"] == "queued" and task.get("available_at", 0) > datetime.now().timestamp():
@@ -393,6 +395,8 @@ class Terminal:
             detail = labels.get(event["kind"], event["kind"])
             if event["kind"] == "tool":
                 detail = f"{event['name']} {event['phase']}"
+            if event["kind"] == "evidence_attached":
+                detail = f"Evidence linked {event['name']}"
             attempt = f"  attempt {event['attempt']}" if event["attempt"] else ""
             self.log("status", f"{when}{attempt}  {detail}")
         if not page["events"]:

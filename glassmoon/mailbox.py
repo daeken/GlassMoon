@@ -9,6 +9,7 @@ import uuid
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+from .evidence import identifier as evidence_identifier
 from .ipc import ProtocolError, RequestError, call
 from .models import INTEGER, TEXT, encoded_size, result_text
 from .service import fail, serve, service_args
@@ -33,6 +34,10 @@ TOOLS = {
     "timeline": tool(
         "Read paginated task state changes and tool events, newest first.",
         {"id": TEXT}, {"before": INTEGER},
+    ),
+    "attach_evidence": tool(
+        "Attach a reference to published evidence to a task.",
+        {"id": TEXT, "owner": TEXT, "key": TEXT},
     ),
     "review": tool(
         "Resolve an interrupted task after checking its effects, or cancel an unclaimed task.",
@@ -119,6 +124,10 @@ class Mailbox:
                     name TEXT, phase TEXT, observed_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS task_history ON task_events(task_id, seq);
+                CREATE TABLE IF NOT EXISTS task_evidence (
+                    task_id TEXT NOT NULL REFERENCES tasks(id), owner TEXT NOT NULL,
+                    key TEXT NOT NULL, PRIMARY KEY(task_id, owner, key)
+                );
             """)
             db.execute("BEGIN IMMEDIATE")
             fields = {field[1] for field in db.execute("PRAGMA table_info(tasks)")}
@@ -193,6 +202,23 @@ class Mailbox:
             "before": rows[19]["seq"] if len(rows) > 20 else None,
         }
 
+    def attach_evidence(self, db, now, id, owner, key):
+        if not evidence_identifier(owner) or not evidence_identifier(key):
+            raise fail("invalid_evidence_key", "Use a simple owner and key")
+        row = db.execute("SELECT attempts FROM tasks WHERE id=?", (id,)).fetchone()
+        if row is None:
+            raise fail("unknown_task", "Task does not exist")
+        fields = (id, owner, key)
+        if not db.execute(
+            "SELECT 1 FROM task_evidence WHERE task_id=? AND owner=? AND key=?", fields
+        ).fetchone():
+            count = db.execute("SELECT COUNT(*) FROM task_evidence WHERE task_id=?", (id,)).fetchone()[0]
+            if count >= 12:
+                raise fail("evidence_limit", "A task can link at most 12 evidence references")
+            db.execute("INSERT INTO task_evidence VALUES (?, ?, ?)", fields)
+            self.event(db, now, id, row["attempts"], "evidence_attached", f"{owner}/{key}")
+        return {"id": id, "owner": owner, "key": key}
+
     def submit(self, db, now, sender, agent, key, task, recovery_check=None, parent=None):
         sender, agent, key = (
             label(value, name)
@@ -245,6 +271,10 @@ class Mailbox:
             (id, row["attempts"]),
         ).fetchall()
         task["progress"] = [dict(event) for event in events]
+        refs = db.execute(
+            "SELECT owner, key FROM task_evidence WHERE task_id=? ORDER BY owner, key", (id,)
+        ).fetchall()
+        task["evidence"] = [dict(ref) for ref in refs]
         if encoded_size(task) > 60 * 1024 and task["result"]:
             original = task["result"]
             task["result_truncated"] = True

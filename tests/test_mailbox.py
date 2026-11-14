@@ -503,3 +503,15 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.now = deferred["available_at"]
         again = self.rpc("claim", agent="tide", lease_seconds=5)
         self.assertEqual((again["task"]["id"], again["task"]["attempts"]), (task["id"], 2))
+
+    def test_linked_evidence_is_idempotent_and_contains_no_image(self):
+        task = self.rpc("submit", **TASK)
+        fields = {"id": task["id"], "owner": "moon", "key": "screenshot"}
+        self.assertEqual(self.rpc("attach_evidence", **fields), fields)
+        self.assertEqual(self.rpc("attach_evidence", **fields), fields)
+        found = self.rpc("get", id=task["id"])
+        self.assertEqual(found["evidence"], [{"owner": "moon", "key": "screenshot"}])
+        self.assertEqual(found["revision"], task["revision"])
+        events = self.rpc("timeline", id=task["id"])["events"]
+        self.assertEqual([event["kind"] for event in events], ["evidence_attached", "submitted"])
+        self.assertEqual(events[0]["name"], "moon/screenshot")
