@@ -38,13 +38,15 @@ def definitions(params):
         raise fail("invalid_tools", f"Supply up to {MAX_FUNCTIONS} function definitions")
     seen = set()
     for tool in tools:
-        name = tool["name"]
+        if not isinstance(tool, dict):
+            raise fail("invalid_tools", "Each function definition must be an object")
+        name = tool.get("name")
         if (
             not isinstance(name, str)
             or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name)
             or name in seen
-            or not isinstance(tool["description"], str)
-            or not isinstance(tool["parameters"], dict)
+            or not isinstance(tool.get("description"), str)
+            or not isinstance(tool.get("parameters"), dict)
         ):
             raise fail(
                 "invalid_tools",
@@ -67,6 +69,8 @@ def calls(items):
     output = []
     seen = set()
     for item in items:
+        if not isinstance(item, dict):
+            raise fail("invalid_tool_calls", "Each function call must be an object")
         call = {key: item.get(key) for key in ("id", "name", "arguments")}
         if (
             not all(isinstance(value, str) for value in call.values())
@@ -87,8 +91,10 @@ def history(params):
     if not isinstance(rounds, list) or len(rounds) > 8:
         raise fail("invalid_tool_history", "Expected up to eight function exchanges")
     for exchange in rounds:
-        announced = calls(exchange["calls"])
-        outputs = exchange["outputs"]
+        if not isinstance(exchange, dict):
+            raise fail("invalid_tool_history", "Each function exchange must be an object")
+        announced = calls(exchange.get("calls"))
+        outputs = exchange.get("outputs")
         if (
             not isinstance(exchange.get("text", ""), str)
             or not isinstance(exchange.get("state", {}), dict)

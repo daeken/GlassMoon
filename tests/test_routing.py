@@ -16,6 +16,28 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class RoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_router_rejects_calls_to_unadvertised_functions(self):
+        router = Router("unused")
+        model = {
+            "id": "model", "input_modalities": ["text"], "output_modalities": ["text"],
+            "context_tokens": 1000, "streaming": True, "tool_calls": True,
+            "provider": "fixture", "provider_generation": 11, "interface_version": 1,
+        }
+        params = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "tools": [{"name": "allowed", "description": "Allowed", "parameters": {}}],
+        }
+        reply = {"message": {"role": "assistant", "content": ""}, "tool_calls": [
+            {"id": "a", "name": "unknown", "arguments": "{}"},
+        ]}
+        with (
+            patch.object(router, "models", AsyncMock(return_value=([model], []))),
+            patch("glassmoon.provider_router.call", AsyncMock(return_value=reply)),
+            self.assertRaises(RequestError) as invalid,
+        ):
+            await router.handle("generate", params, None, False)
+        self.assertEqual(invalid.exception.code, "invalid_provider_reply")
+
     async def test_pinned_provider_catalog_skips_unrelated_workers(self):
         router = Router("unused")
         rows = [

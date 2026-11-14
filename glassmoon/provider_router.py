@@ -213,7 +213,7 @@ class Router:
             ) from None
         reply = message(result["message"])
         announced = functions.calls(result.get("tool_calls", []))
-        if announced and not tools:
+        if {item["name"] for item in announced} - {item["name"] for item in tools}:
             raise fail(
                 "invalid_provider_reply",
                 "Provider requested tools that were not enabled",
