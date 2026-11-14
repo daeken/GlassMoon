@@ -303,6 +303,8 @@ The supervisor waits through a broker outage while the worker is still running. 
 
 Workers can declare a maintainer with `--maintainer AGENT`. `/maintainer SERVICE` shows the active generation and its declared maintainer. `/services` and `/describe` also display this metadata. `/maintain SERVICE TASK` queues work for the current generation's maintainer and records the service and generation in the task. Use `SERVICE#GENERATION` to require a specific active generation at lookup. The maintainer can receive the task after coming online.
 
+Use `/health SERVICE` to probe the active generation's `health` method and show its registered identity. The TUI reports a route change during the probe or a different service name declared in the health payload.
+
 ### Recover after a broker restart
 
 The agent, browser, mailbox, model providers and router, Python tool publisher, MCP bridge, and desktop service reconnect when their broker socket returns. Promoted staged workers join this recovery when reconnect is enabled and the broker has sent their activation notice. An unpromoted candidate needs a fresh probe after losing the broker. The TUI restores its lifecycle feed with a fresh snapshot. Existing browser windows and agent state remain available when their own workers survive. In-flight calls whose connection was lost may have run, so task receipts and review govern their recovery.

@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, patch
 
 from glassmoon.agent import Agent
 from glassmoon.echo import METHODS
-from glassmoon.ipc import ProtocolError, RequestError, call, connect
+from glassmoon.ipc import ProtocolError, RequestError, active_service, call, connect
 from glassmoon.models import Transcripts
 from glassmoon.release import release
-from glassmoon.service import serve
+from glassmoon.service import method, serve
 from glassmoon.toolbox import METHODS as TOOL_METHODS
 from glassmoon.toolbox import ToolService, tool
 from glassmoon.tui import Terminal
@@ -24,6 +24,39 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class UpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_terminal_health_pins_generation_and_flags_identity_mismatch(self):
+        async with AsyncExitStack() as stack, asyncio.timeout(10):
+            socket = await self.start_broker(stack, 5000)
+            called = asyncio.Event()
+            resume = asyncio.Event()
+            resume.set()
+
+            async def handler(*_):
+                called.set()
+                await resume.wait()
+                return {"status": "ok", "service": "other"}
+
+            service = asyncio.create_task(serve(socket, "fixture", None, {"health": method("Probe")}, handler))
+            stack.push_async_callback(asyncio.gather, service, return_exceptions=True)
+            stack.callback(service.cancel)
+            while (active := await active_service(socket, "fixture")) is None:
+                await asyncio.sleep(.01)
+            terminal = Terminal(None, socket)
+            await terminal.service_health("fixture")
+            self.assertIn("Health identified other", terminal.windows["status"][-1])
+            called.clear()
+            resume.clear()
+            probe = asyncio.create_task(terminal.service_health("fixture"))
+            stack.push_async_callback(asyncio.gather, probe, return_exceptions=True)
+            stack.callback(probe.cancel)
+            await called.wait()
+            replacement = await stack.enter_async_context(connect(socket))
+            await replacement.request("register", "register", name="fixture", interface_version=1, methods={"health": method("Probe")})
+            await replacement.request("promote", "promote", expected_active=active["generation"])
+            resume.set()
+            await probe
+            self.assertIn("changed during the probe", terminal.windows["status"][-1])
+
     async def test_exact_call_refuses_broker_without_feature(self):
         async with AsyncExitStack() as stack, asyncio.timeout(5):
             folder = Path(stack.enter_context(TemporaryDirectory(prefix="gm-old-", dir="/tmp")))

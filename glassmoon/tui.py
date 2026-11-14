@@ -146,6 +146,32 @@ class Terminal:
             snapshot = (await wire.request("list", "list"))["result"]
         self.display_services(snapshot["services"])
 
+    async def service_health(self, service):
+        async with asyncio.timeout(5):
+            active = await active_service(self.socket, service)
+            if active is None:
+                self.log("status", f"No active service named {service}")
+                return
+            generation = active["generation"]
+            self.display_services([active])
+            try:
+                health = await call(
+                    self.socket, service, "health", {}, generation=generation,
+                    version=active["interface_version"],
+                )
+            except RequestError as error:
+                if error.code != "generation_unavailable" or error.generation is not None:
+                    raise
+                health = None
+            current = await active_service(self.socket, service)
+        if health is None or current is None or current["generation"] != generation:
+            self.log("status", f"{service} #{generation} changed during the probe. Run /health {service} again.")
+            return
+        self.log("status", json.dumps(health, indent=2, ensure_ascii=False))
+        identity = health.get("service") if isinstance(health, dict) else None
+        if isinstance(identity, str) and identity != service:
+            self.log("status", f"Health identified {identity}. The broker route is registered as {service}.")
+
     async def query(self, window):
         lock = self.history_loading.setdefault(window, asyncio.Lock())
         async with lock:
@@ -685,7 +711,7 @@ class Terminal:
             ) as error:
                 if window in self.history_page or window in self.search_page:
                     self.leave_history(window)
-                self.log(window, str(error))
+                self.log(window, str(error) or type(error).__name__)
 
         task = asyncio.create_task(run())
         self.tasks.add(task)
@@ -741,6 +767,7 @@ class Terminal:
                     self.log(self.active, "/more-tasks pages through your last task list")
                     self.log(self.active, "/maintain SERVICE[#GENERATION] TASK queues work for the maintainer")
                     self.log(self.active, "/maintainer SERVICE shows the active generation's maintainer")
+                    self.log(self.active, "/health SERVICE probes the exact active generation")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                     self.log(self.active, "/describe-tool SERVICE TOOL shows the tool's inputs")
                     self.log(self.active, "/model [auto|default|PROVIDER[/MODEL]] in an agent window")
@@ -797,6 +824,9 @@ class Terminal:
                 case "/maintainer" if argument:
                     self.select("status")
                     self.start(lambda: self.show_maintainer(argument))
+                case "/health" if argument:
+                    self.select("status")
+                    self.start(lambda: self.service_health(argument))
                 case "/queue" | "/queue-check" if " " in argument:
                     agent, _, body = argument.partition(" ")
                     recovery = None
