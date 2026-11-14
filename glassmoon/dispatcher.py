@@ -15,6 +15,17 @@ CONNECTION_ERRORS = (ProtocolError, EOFError, OSError, TimeoutError)
 PRE_ADMISSION_ERRORS = {"busy", "unavailable"}
 
 
+async def online_agents(socket):
+    async with asyncio.timeout(5), connect(socket) as wire:
+        rows = (await wire.request("list", "list"))["result"]["services"]
+    return {
+        name
+        for row in rows
+        if row["state"] == "active" and row["name"].startswith("agent.")
+        and (name := row["name"].removeprefix("agent."))
+    }
+
+
 class Dispatch:
     def __init__(self, socket, mailbox, identity):
         self.socket = socket
@@ -27,11 +38,7 @@ class Dispatch:
             return await call_tool(self.socket, self.mailbox, method, fields)
 
     async def online(self):
-        async with asyncio.timeout(5), connect(self.socket) as wire:
-            rows = (await wire.request("list", "list"))["result"]["services"]
-        return any(
-            item["name"] == self.agent and item["state"] == "active" for item in rows
-        )
+        return self.identity in await online_agents(self.socket)
 
     async def heartbeat(self, lease):
         while True:
@@ -62,8 +69,8 @@ class Dispatch:
                 await asyncio.sleep(0.5)
         return None
 
-    async def deliver(self):
-        if not await self.online():
+    async def deliver(self, *, check_online=True):
+        if check_online and not await self.online():
             return None
         claimed = await self.rpc(
             "claim", {"agent": self.identity, "lease_seconds": LEASE_SECONDS}
@@ -187,15 +194,13 @@ class Dispatch:
 
 
 async def run(args):
-    dispatchers = [
-        Dispatch(args.socket, args.mailbox, agent)
-        for agent in dict.fromkeys(args.agent)
-    ]
+    fixed = {label(agent, "agent") for agent in args.agent}
+    discovered = set()
 
     async def worker(dispatch):
-        while True:
+        while not args.discover or dispatch.identity in discovered:
             try:
-                result = await dispatch.deliver()
+                result = await dispatch.deliver(check_online=not args.discover)
             except (*CONNECTION_ERRORS, RequestError) as error:
                 print(
                     json.dumps(
@@ -215,7 +220,36 @@ async def run(args):
             if result is None or result["status"] == "queued":
                 await asyncio.sleep(args.interval)
 
-    await asyncio.gather(*(worker(dispatch) for dispatch in dispatchers))
+    def start(agent):
+        return asyncio.create_task(worker(Dispatch(args.socket, args.mailbox, agent)))
+
+    tasks = {}
+    try:
+        if not args.discover:
+            tasks = {agent: start(agent) for agent in fixed}
+            await asyncio.gather(*tasks.values())
+            return
+        while True:
+            try:
+                discovered = await online_agents(args.socket)
+            except (*CONNECTION_ERRORS, RequestError):
+                discovered = set()
+            if fixed:
+                discovered &= fixed
+            for agent, task in list(tasks.items()):
+                if task.done():
+                    await task
+                    del tasks[agent]
+            for agent in discovered - tasks.keys():
+                tasks[agent] = start(agent)
+            if args.once:
+                await asyncio.gather(*tasks.values())
+                return
+            await asyncio.sleep(args.interval)
+    finally:
+        for task in tasks.values():
+            task.cancel()
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
 
 
 def main():
@@ -223,7 +257,10 @@ def main():
     parser.add_argument("--socket", required=True)
     parser.add_argument("--mailbox", default="tools.mailbox")
     parser.add_argument(
-        "--agent", action="append", required=True, help="Agent identity to dispatch to"
+        "--agent", action="append", default=[], help="Agent identity to dispatch to"
+    )
+    parser.add_argument(
+        "--discover", action="store_true", help="Find agent recipients as they register"
     )
     parser.add_argument("--interval", type=float, default=2)
     parser.add_argument(
@@ -232,6 +269,8 @@ def main():
         help="Try one delivery per configured agent and exit",
     )
     args = parser.parse_args()
+    if not args.discover and not args.agent:
+        parser.error("Choose --agent or --discover")
     if not 0.05 <= args.interval <= 60:
         parser.error("--interval must be between 0.05 and 60 seconds")
     try:
