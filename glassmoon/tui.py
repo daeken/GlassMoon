@@ -68,20 +68,19 @@ class Terminal:
         self.windows[window].append(terminal_text(text))
         self.dirty = True
 
-    def display_services(self):
-        if not self.services:
+    def display_services(self, services=None):
+        rows = self.services.values() if services is None else services
+        rows = sorted(rows, key=lambda service: (service["name"], service["generation"]))
+        if not rows:
             self.log("status", "No registered services.")
             return
-        for generation, service in sorted(
-            self.services.items(),
-            key=lambda entry: (entry[1]["name"], entry[0]),
-        ):
+        for service in rows:
             maintainer = f"  maintainer {service['maintainer']}" if service.get("maintainer") else ""
             remaining = service.get("drain_remaining_ms")
             drain = f"  drain deadline in {remaining / 1000:.1f}s" if remaining is not None else ""
             self.log(
                 "status",
-                f"{service['name']} #{generation} {service['state']}  "
+                f"{service['name']} #{service['generation']} {service['state']}  "
                 f"interface {service['interface_version']}  "
                 f"{service.get('in_flight', '?')} in flight{maintainer}{drain}",
             )
@@ -110,7 +109,8 @@ class Terminal:
                             self.services.pop(generation, None)
                         else:
                             self.services[generation] = item
-                        self.log("status", f"{item['name']} #{generation} {action}")
+                        reason = f" ({item['reason']})" if item.get("reason") else ""
+                        self.log("status", f"{item['name']} #{generation} {action}{reason}")
             except (EOFError, OSError, ProtocolError):
                 self.services.clear()
                 if not waiting:
@@ -144,8 +144,7 @@ class Terminal:
     async def list_services(self):
         async with connect(self.socket) as wire:
             snapshot = (await wire.request("list", "list"))["result"]
-        self.services = {item["generation"]: item for item in snapshot["services"]}
-        self.display_services()
+        self.display_services(snapshot["services"])
 
     async def query(self, window):
         lock = self.history_loading.setdefault(window, asyncio.Lock())

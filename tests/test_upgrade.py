@@ -268,6 +268,10 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(description["result"]["maintainer"], "moon")
 
             terminal = Terminal(None, socket)
+            terminal.services = {0: {"name": "watch snapshot", "generation": 0}}
+            await terminal.list_services()
+            self.assertIn(f"echo #{latest}", terminal.windows["status"][-1])
+            self.assertEqual(list(terminal.services), [0])
             await terminal.show_maintainer("echo")
             self.assertIn(f"echo #{latest}  maintainer moon", terminal.windows["status"][-1])
             queue = AsyncMock()
