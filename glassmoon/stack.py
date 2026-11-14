@@ -154,6 +154,7 @@ class Stack:
                             rows = (await wire.request("list", "list"))["result"][
                                 "services"
                             ]
+                            exact_calls = "generation_calls" in wire.features
                         if service:
                             active = next(
                                 (
@@ -168,6 +169,8 @@ class Stack:
                                 await asyncio.sleep(0.1)
                                 continue
                             if probe:
+                                if not exact_calls:
+                                    raise RuntimeError("Readiness probes require a broker with exact-generation calls")
                                 result = await call(
                                     self.socket,
                                     service,
