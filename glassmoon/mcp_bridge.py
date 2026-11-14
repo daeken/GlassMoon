@@ -78,8 +78,7 @@ class Bridge:
             async with asyncio.timeout(MCP_TIMEOUT):
                 result = await client.call_tool(name, arguments)
                 payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
-                if name in self.image_tools:
-                    self.extract_image(payload)
+                self.extract_image(payload, allow_image=name in self.image_tools)
                 return payload
         except TimeoutError:
             raise fail("mcp_timeout", "MCP tool did not respond in time") from None
@@ -89,13 +88,13 @@ class Bridge:
             ) from None
 
     @staticmethod
-    def extract_image(payload):
+    def extract_image(payload, *, allow_image=True):
         for index, block in enumerate(payload.get("content", [])):
             if block.get("type") != "image":
                 continue
             image = {"type": "image", "url": f"data:{block['mimeType']};base64,{block['data']}"}
             accepted = False
-            if "image" not in payload:
+            if allow_image and "image" not in payload:
                 try:
                     screenshot_bytes(image)
                     accepted = True

@@ -150,7 +150,7 @@ uv run --locked python -m glassmoon.mcp_bridge --socket "$GLASSMOON_SOCKET" \
 
 For a Streamable HTTP MCP server, use `--url` in place of the local command. `--bearer-env` selects the environment variable holding its bearer token. For local stdio servers, `--pass-env NAME` forwards a named environment variable.
 
-Pass `--image-tool NAME` for an MCP function that returns images. The bridge exposes its first supported, bounded JPEG or PNG as an image tool result, so the router can select a model with image support.
+Pass `--image-tool NAME` for an MCP function that returns images. The bridge exposes its first supported, bounded JPEG or PNG as an image tool result, so the router can select a model with image support. Other MCP functions return a text placeholder for image blocks.
 
 Use `/health SERVICE` on an MCP bridge to check whether the upstream is reachable and whether its advertised tools changed. A `changed` report lists added, removed, and modified tools. Stage and probe a replacement bridge to adopt the new definitions.
 

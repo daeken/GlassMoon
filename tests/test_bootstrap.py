@@ -39,6 +39,12 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    def test_mcp_omits_undeclared_images_from_text_tool_results(self):
+        encoded = base64.b64encode(b"\xff\xd8fixture").decode()
+        payload = {"content": [{"type": "image", "mimeType": "image/jpeg", "data": encoded}]}
+        Bridge.extract_image(payload, allow_image=False)
+        self.assertEqual(payload, {"content": [{"type": "text", "text": "MCP image omitted"}]})
+
     async def test_compaction_retries_oversized_reply_with_shorter_prompt(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))
