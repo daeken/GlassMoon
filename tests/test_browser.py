@@ -114,7 +114,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def exercise_browser(self, worker):
         first = await worker.invoke("open", {})
-        second = await worker.invoke("open", {})
+        second = await worker.invoke("open", {"width": 320, "height": 480})
         a = {"window": first["window"]}
         b = {"window": second["window"]}
         for window in (a, b):
@@ -128,6 +128,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             )
         screenshot = await worker.invoke("screenshot", a)
         self.assertEqual((screenshot["width"], screenshot["height"]), (768, 512))
+        compact = await worker.invoke("screenshot", b)
+        self.assertEqual((compact["width"], compact["height"]), (320, 480))
+        with self.assertRaises(RequestError) as offscreen:
+            await worker.invoke("click", b | {"x": 320, "y": 1})
+        self.assertEqual(offscreen.exception.code, "invalid_position")
+        with self.assertRaises(RequestError) as invalid:
+            await worker.invoke("open", {"width": 239})
+        self.assertEqual(invalid.exception.code, "invalid_viewport")
         image = screenshot["image"]
         self.assertTrue(
             base64.b64decode(image["url"].split(",", 1)[1]).startswith(b"\xff\xd8")

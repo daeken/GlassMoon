@@ -26,7 +26,7 @@ ACTION_STEPS = ("click", "type_text", "press", "scroll", "element", "wait_for")
 TOOLS = {
     "open": tool(
         "Open an isolated browser window. Returns the window handle.",
-        optional={"url": TEXT},
+        optional={"url": TEXT, "width": INTEGER, "height": INTEGER},
     ),
     "navigate": tool(
         "Navigate to an HTTP(S) page and wait for DOM readiness.",
@@ -223,11 +223,14 @@ class Browser:
 
     async def open(self, args):
         url = self.navigation_url(args["url"]) if args.get("url") else None
+        viewport = {axis: args.get(axis, default) for axis, default in VIEWPORT.items()}
+        if any(type(size) is not int or not 240 <= size <= 1600 for size in viewport.values()):
+            raise fail("invalid_viewport", "Use a browser width and height between 240 and 1600 pixels")
         async with self.opening:
             if len(self.windows) >= self.max_windows:
                 raise fail("window_limit", "Close a window before opening another")
             context = await self.browser.new_context(
-                viewport=VIEWPORT,
+                viewport=viewport,
                 device_scale_factor=1,
                 accept_downloads=False,
                 service_workers="block",
@@ -254,7 +257,7 @@ class Browser:
                 "window": handle,
                 "engine": self.engine,
                 "url": page.url,
-                **VIEWPORT,
+                **viewport,
             }
 
     async def invoke(self, action, args):
@@ -366,21 +369,23 @@ class Browser:
                     ) from None
                 return {"visible": True}
             case "screenshot":
+                viewport = page.viewport_size
                 for quality in (70, 45, 25, 10):
                     data = await page.screenshot(
                         type="jpeg", quality=quality, scale="css", animations="disabled"
                     )
                     if len(data) <= IMAGE_LIMIT:
-                        return image_result(data, **VIEWPORT, url=page.url)
+                        return image_result(data, **viewport, url=page.url)
                 raise fail(
                     "image_too_large", "Viewport screenshot exceeds the IPC budget"
                 )
             case "click":
                 x, y = args["x"], args["y"]
+                viewport = page.viewport_size
                 if (
                     type(x) is not int
                     or type(y) is not int
-                    or not (0 <= x < VIEWPORT["width"] and 0 <= y < VIEWPORT["height"])
+                    or not (0 <= x < viewport["width"] and 0 <= y < viewport["height"])
                 ):
                     raise fail(
                         "invalid_position",

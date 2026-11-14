@@ -164,6 +164,8 @@ For fixture-driven work, pass `--allow-origin http://127.0.0.1:8000` to limit in
 
 Screenshots use viewport coordinates and arrive as image tool results. The router selects a model declaring `tool_images` and image input once a screenshot tool is available. The OpenAI example catalog includes this support. The runloop retains the latest screenshot within the IPC frame budget. Browser tools are also callable in Python with `glassmoon.toolbox.call_tool`. The TUI command `/tools` probes the agent's currently configured tool services.
 
+Supply `width` and `height` to `open` to test a specific viewport. Each dimension accepts 240–1600 CSS pixels. Screenshots and coordinate clicks use the window's actual dimensions.
+
 ### Share a browser screenshot between agents
 
 Start a local visual evidence service with its own SQLite file. Pass `--evidence tools.evidence` when launching a browser worker, and add `--tool-service tools.evidence` to the receiving agent.
