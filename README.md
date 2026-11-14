@@ -128,6 +128,8 @@ uv run --locked python -m glassmoon.mcp_bridge --socket "$GLASSMOON_SOCKET" \
 
 For a Streamable HTTP MCP server, use `--url` in place of the local command. `--bearer-env` selects the environment variable holding its bearer token. For local stdio servers, `--pass-env NAME` forwards a named environment variable.
 
+Pass `--image-tool NAME` for an MCP function that returns images. The bridge exposes its first supported, bounded JPEG or PNG as an image tool result, so the router can select a model with image support.
+
 An agent turn calls the same tool generation that described its tools. If a service changes during the turn, a stale call returns `tool_changed`. The next turn discovers the replacement's definitions.
 
 In an agent's TUI window, use `/tool enable SERVICE` or `/tool disable SERVICE` to change its shared tools for new turns. `/tool default SERVICE` restores the startup setting for that name. `/tools` reports the saved settings revision, availability, and the generation it probed. An enabled service can come online later. The agent stores these overrides in its own database, and changes can apply while its current turn finishes. Trusted broker clients can make the same revision-checked changes with `tool_policy` and `set_tool_policy`.

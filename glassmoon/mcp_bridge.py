@@ -10,6 +10,7 @@ import httpx2
 from mcp import Client, StdioServerParameters
 from mcp.client.streamable_http import streamable_http_client
 
+from .evidence import screenshot_bytes
 from .ipc import ProtocolError, RequestError
 from .service import fail, serve
 from .toolbox import METHODS, ToolService
@@ -18,9 +19,10 @@ MCP_TIMEOUT = 25
 
 
 class Bridge:
-    def __init__(self, target, headers=None):
+    def __init__(self, target, headers=None, image_tools=()):
         self.target = target
         self.headers = headers or {}
+        self.image_tools = frozenset(image_tools)
 
     def client(self):
         if not self.headers:
@@ -46,6 +48,7 @@ class Bridge:
                     tools[tool.name] = {
                         "description": tool.description or tool.name,
                         "parameters": tool.input_schema,
+                        "returns_image": tool.name in self.image_tools,
                     }
                 cursor = page.next_cursor
                 if cursor is None:
@@ -56,13 +59,35 @@ class Bridge:
         try:
             async with asyncio.timeout(MCP_TIMEOUT):
                 result = await client.call_tool(name, arguments)
-                return result.model_dump(mode="json", by_alias=True, exclude_none=True)
+                payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
+                if name in self.image_tools:
+                    self.extract_image(payload)
+                return payload
         except TimeoutError:
             raise fail("mcp_timeout", "MCP tool did not respond in time") from None
         except Exception as error:  # noqa: BLE001 - sanitize transport and server failures.
             raise fail(
                 "mcp_call_failed", f"MCP call failed ({type(error).__name__})"
             ) from None
+
+    @staticmethod
+    def extract_image(payload):
+        for index, block in enumerate(payload.get("content", [])):
+            if block.get("type") != "image":
+                continue
+            image = {"type": "image", "url": f"data:{block['mimeType']};base64,{block['data']}"}
+            accepted = False
+            if "image" not in payload:
+                try:
+                    screenshot_bytes(image)
+                    accepted = True
+                except RequestError:
+                    pass
+            if accepted:
+                payload["image"] = image
+            payload["content"][index] = {
+                "type": "text", "text": "MCP image attachment" if accepted else "MCP image omitted",
+            }
 
 
 async def run(args):
@@ -72,7 +97,7 @@ async def run(args):
         key = os.environ.get(args.bearer_env) if args.bearer_env else None
         if args.bearer_env and not key:
             raise ValueError(f"Set {args.bearer_env} before starting this MCP bridge")
-        bridge = Bridge(args.url, {"Authorization": f"Bearer {key}"} if key else None)
+        bridge = Bridge(args.url, {"Authorization": f"Bearer {key}"} if key else None, args.image_tool)
     else:
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not command:
@@ -86,7 +111,8 @@ async def run(args):
                 args=command[1:],
                 cwd=Path(args.cwd),
                 env=environment,
-            )
+            ),
+            image_tools=args.image_tool,
         )
     async with bridge.client() as client:
         functions = await bridge.tools(client)
@@ -114,6 +140,7 @@ def main():
     parser.add_argument("--replace", type=int)
     parser.add_argument("--staged", action="store_true", help="Wait for a separately probed activation")
     parser.add_argument("--maintainer", help="GlassMoon agent identity responsible for this service")
+    parser.add_argument("--image-tool", action="append", default=[], help="Expose a tool's first bounded JPEG or PNG result as an image")
     parser.add_argument("--url", help="Streamable HTTP MCP endpoint")
     parser.add_argument(
         "--bearer-env", help="Environment variable containing a remote bearer token"

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import sys
@@ -19,11 +20,16 @@ from glassmoon.toolbox import load
 from glassmoon.tui import Terminal
 
 MCP_SERVER = """
+import base64
+from mcp import types
 from mcp.server.mcpserver import MCPServer
 server = MCPServer("test")
 @server.tool()
 def add(a: int, b: int) -> int:
     return a + b
+@server.tool()
+def fixture_image() -> types.ImageContent:
+    return types.ImageContent(data=base64.b64encode(b"\\xff\\xd8fixture").decode(), mime_type="image/jpeg")
 server.run()
 """
 
@@ -330,12 +336,19 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             module = root / "mcp.py"
             module.write_text(MCP_SERVER)
             bridge = Bridge(
-                StdioServerParameters(command=sys.executable, args=["-I", str(module)])
+                StdioServerParameters(command=sys.executable, args=["-I", str(module)]),
+                image_tools=["fixture_image"],
             )
             async with bridge.client() as client:
-                self.assertEqual(set(await bridge.tools(client)), {"add"})
+                tools = await bridge.tools(client)
+                self.assertEqual(set(tools), {"add", "fixture_image"})
+                self.assertTrue(tools["fixture_image"]["returns_image"])
                 answer = await bridge.invoke(client, "add", {"a": 12, "b": 30})
+                image = await bridge.invoke(client, "fixture_image", {})
             self.assertEqual(answer["structuredContent"]["result"], 42)
+            encoded = base64.b64encode(b"\xff\xd8fixture").decode()
+            self.assertEqual(image["image"]["url"], "data:image/jpeg;base64," + encoded)
+            self.assertNotIn("data", image["content"][0])
 
     async def test_agent_calls_discovered_tool(self):
         with tempfile.TemporaryDirectory() as folder:
