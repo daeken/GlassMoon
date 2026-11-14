@@ -504,6 +504,16 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["more"])
         self.assertTrue(self.rpc("handoff", limit=1)["more"])
 
+    def test_handoff_includes_a_bounded_excerpt_for_completed_work(self):
+        task = self.rpc("submit", **TASK)
+        lease = self.rpc("claim", agent="tide", lease_seconds=30)
+        result = "Start of the report. " + "detail " * 50
+        self.rpc("finish", id=task["id"], token=lease["token"], status="done", result=result)
+        row = self.rpc("handoff")["tasks"][0]
+        self.assertEqual(row["result_excerpt"], result[:240])
+        self.assertTrue(row["result_excerpt_truncated"])
+        self.assertEqual(self.rpc("get", id=row["id"])["result"], result)
+
     def test_get_keeps_escape_heavy_results_within_a_reply(self):
         values = TASK | {"task": "A" + "\0" * 3999, "recovery_check": "A" + "\0" * 1199}
         task = self.rpc("submit", **values)

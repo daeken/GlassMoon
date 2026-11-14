@@ -459,6 +459,9 @@ class Terminal:
             if task["has_evidence"]:
                 detail += " · evidence linked"
             self.log("status", detail)
+            if excerpt := task.get("result_excerpt"):
+                suffix = "…" if task["result_excerpt_truncated"] else ""
+                self.log("status", "  " + " ".join(excerpt.splitlines()) + suffix)
         if not report["tasks"]:
             self.log("status", "No tasks to hand off.")
         if report["more"]:
