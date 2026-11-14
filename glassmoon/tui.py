@@ -34,11 +34,13 @@ class Terminal:
         self.input = ""
         self.cursor = 0
         self.scroll = 0
+        self.scroll_to_top = False
         self.tasks = set()
         self.sending = set()
         self.partial = {}
         self.loaded = set()
         self.history_loading = {}
+        self.history_before = {}
         self.command_history = []
         self.history_index = 0
         self.dirty = True
@@ -128,15 +130,30 @@ class Terminal:
         async with lock:
             if window in self.loaded:
                 return
-            history = await call(self.socket, f"agent.{window}", "history", {})
-            prior = deque(maxlen=500)
-            for item in history["messages"]:
-                label = "you" if item["role"] == "user" else window
-                prior.append(terminal_text(f"<{label}> {result_text(item['content'])}"))
-            prior.extend(self.windows[window])
-            self.windows[window] = prior
+            await self.load_history(window, {}, older=False)
             self.loaded.add(window)
-            self.dirty = True
+
+    async def load_history(self, window, arguments, *, older):
+        history = await call(self.socket, f"agent.{window}", "history", arguments)
+        prior = []
+        for item in history["messages"]:
+            label = "you" if item["role"] == "user" else window
+            prior.append(terminal_text(f"<{label}> {result_text(item['content'])}"))
+        self.history_before[window] = history["before"]
+        entries = [*prior, *self.windows[window]]
+        self.windows[window] = deque(entries[:500] if older else entries[-500:], maxlen=500)
+        if older and self.active == window:
+            self.scroll_to_top = True
+        self.dirty = True
+
+    async def older_history(self, window):
+        await self.query(window)
+        async with self.history_loading[window]:
+            cursor = self.history_before[window]
+            if cursor is None:
+                self.log(window, "Reached the start of the saved conversation.")
+                return
+            await self.load_history(window, {"before": cursor}, older=True)
 
     async def list_models(self):
         result = await call(self.socket, "models", "models", {})
@@ -315,12 +332,14 @@ class Terminal:
     def select(self, window):
         self.active = window
         self.scroll = 0
+        self.scroll_to_top = False
 
     def submit(self):
         text = self.input
         self.input = ""
         self.cursor = 0
         self.scroll = 0
+        self.scroll_to_top = False
         if not text.strip():
             return True
         self.command_history.append(text)
@@ -347,6 +366,7 @@ class Terminal:
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
+                    self.log(self.active, "/older loads earlier messages in an agent window")
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -355,6 +375,9 @@ class Terminal:
                 case "/tools" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.tool_status(window), window)
+                case "/older" if self.active != "status":
+                    window = self.active
+                    self.start(lambda: self.older_history(window), window)
                 case "/tool" if self.active != "status":
                     window = self.active
                     self.start(lambda: self.change_tool(window, argument), window)
@@ -500,7 +523,9 @@ class Terminal:
                 lines.extend(
                     textwrap.wrap(line, width - 1, replace_whitespace=False) or [""]
                 )
-        self.scroll = min(self.scroll, max(0, len(lines) - height + 3))
+        maximum_scroll = max(0, len(lines) - height + 3)
+        self.scroll = maximum_scroll if self.scroll_to_top else min(self.scroll, maximum_scroll)
+        self.scroll_to_top = False
         end = len(lines) - self.scroll
         for row, line in enumerate(lines[max(0, end - height + 3) : end], start=1):
             self.put(row, line)

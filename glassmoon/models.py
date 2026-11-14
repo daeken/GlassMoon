@@ -248,11 +248,21 @@ class Transcripts:
                 )
 
     def history(self, identifier, before=None):
-        model, revision, messages = self.read(identifier)
+        conversation = self.db.execute(
+            "SELECT model, revision FROM conversations WHERE id=?", (identifier,)
+        ).fetchone()
+        if conversation is None:
+            raise fail("unknown_conversation", "Conversation does not exist")
+        model, revision = conversation
         end = revision if before is None else min(max(0, before), revision)
         page = []
         size = 0
-        for item in reversed(messages[:end]):
+        rows = self.db.execute(
+            "SELECT value FROM messages WHERE conversation=? AND position<? ORDER BY position DESC",
+            (identifier, end),
+        )
+        for (value,) in rows:
+            item = json.loads(value)
             encoded = encoded_size(item) + 1
             if page and size + encoded > 60 * 1024:
                 break

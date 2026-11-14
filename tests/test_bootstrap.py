@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from collections import deque
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -12,6 +13,7 @@ from glassmoon.ipc import RequestError
 from glassmoon.mcp_bridge import Bridge
 from glassmoon.models import Transcripts
 from glassmoon.toolbox import load
+from glassmoon.tui import Terminal
 
 MCP_SERVER = """
 from mcp.server.mcpserver import MCPServer
@@ -28,6 +30,35 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tui_pages_older_history_without_duplicate_messages(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {}, "", store)
+            for index in range(9):
+                store.append(
+                    "moon", index,
+                    {"role": "user", "content": str(index) + "x" * 14_000},
+                )
+
+            async def history(_socket, _service, method, params):
+                return await agent.handle(method, params, ignore, False)
+
+            terminal = Terminal(None, "")
+            terminal.windows["moon"] = deque(maxlen=500)
+            terminal.select("moon")
+            with patch("glassmoon.tui.call", side_effect=history):
+                await terminal.query("moon")
+                self.assertEqual(terminal.history_before["moon"], 5)
+                await terminal.older_history("moon")
+                self.assertEqual(terminal.history_before["moon"], 1)
+                await terminal.older_history("moon")
+                self.assertIsNone(terminal.history_before["moon"])
+            self.assertEqual(
+                [line[len("<you> ")] for line in terminal.windows["moon"]],
+                list("012345678"),
+            )
+
     async def test_tool_policy_rolls_back_and_survives_replacement(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder, "agent.db")

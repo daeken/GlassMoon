@@ -41,6 +41,8 @@ Type a message to chat. Use `/query NAME` to open another agent, F2 to cycle win
 
 Each agent saves its transcript in a local SQLite database keyed by name. `--state` sets the database path. The agent sends recent complete turns within the IPC frame budget and retains the full committed history on disk. For a different model on the next turn, launch or retire a provider, or replace the agent with the same name and state using `--replace GENERATION` and new requirements. `--provider` and `--model` pin selection when needed.
 
+Use `/older` in an agent's TUI window to page backward through its saved conversation.
+
 ### Use your ChatGPT plan
 
 Run the sign-in command and approve GlassMoon in your browser with an eligible account. The worker reads and refreshes its OAuth credentials from an owner-only local profile. `--profile` selects a different file when passed to both commands. [OpenAI's ChatGPT plan integration guide](https://developers.openai.com/siwc/token-sharing-open-source)
