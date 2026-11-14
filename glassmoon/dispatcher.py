@@ -72,11 +72,17 @@ class Dispatch:
         if task is None:
             return None
         lease = {"id": task["id"], "token": claimed["token"]}
+        recovery = task.get("recovery_check")
+        recovery_context = (
+            f"\nAfter an interruption, the operator can use this recovery check: {recovery}\n"
+            if recovery else ""
+        )
         message = (
             f"GlassMoon task {task['id']} assigned by {task['sender']} (attempt {task['attempts']}).\n\n"
             f"{task['task']}\n\n"
             "Perform the requested work within your configured tools and report what you verified. "
             "If you cannot complete it, describe the blocker and any effects already observed."
+            f"{recovery_context}"
         )
         heartbeat = asyncio.create_task(self.heartbeat(lease))
         event_index = 0

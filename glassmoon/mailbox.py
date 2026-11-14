@@ -18,6 +18,7 @@ TOOLS = {
     "submit": tool(
         "Queue a task for an agent. Retries using the same sender and key return the original task.",
         {"sender": TEXT, "agent": TEXT, "key": TEXT, "task": TEXT},
+        {"recovery_check": TEXT},
     ),
     "list_tasks": tool(
         "List tasks newest first. Optionally filter by agent, status or cursor.",
@@ -77,7 +78,7 @@ class Mailbox:
         self.clock = clock
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path.touch(mode=0o600, exist_ok=True)
-        with closing(sqlite3.connect(self.path)) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("PRAGMA journal_mode = WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -86,6 +87,7 @@ class Mailbox:
                     key TEXT NOT NULL, task TEXT NOT NULL, status TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1, attempts INTEGER NOT NULL DEFAULT 0,
                     token TEXT, lease_until REAL, result TEXT, review_note TEXT,
+                    recovery_check TEXT,
                     created_at REAL NOT NULL, updated_at REAL NOT NULL,
                     UNIQUE(sender, key)
                 );
@@ -102,6 +104,11 @@ class Mailbox:
                     PRIMARY KEY(task_id, attempt, event_index)
                 );
             """)
+            db.execute("BEGIN IMMEDIATE")
+            if "recovery_check" not in {
+                field[1] for field in db.execute("PRAGMA table_info(tasks)")
+            }:
+                db.execute("ALTER TABLE tasks ADD COLUMN recovery_check TEXT")
 
     @contextmanager
     def transaction(self):
@@ -142,17 +149,21 @@ class Mailbox:
         with self.transaction() as (db, now):
             return getattr(self, method)(db, now, **args)
 
-    def submit(self, db, now, sender, agent, key, task):
+    def submit(self, db, now, sender, agent, key, task, recovery_check=None):
         sender, agent, key = (
             label(value, name)
             for name, value in (("sender", sender), ("agent", agent), ("key", key))
         )
         task = content(task, "task", 4000)
+        if recovery_check is not None:
+            recovery_check = content(recovery_check, "recovery check", 1200)
         row = db.execute(
             "SELECT * FROM tasks WHERE sender=? AND key=?", (sender, key)
         ).fetchone()
         if row:
-            if (row["agent"], row["task"]) != (agent, task):
+            if (row["agent"], row["task"], row["recovery_check"]) != (
+                agent, task, recovery_check,
+            ):
                 raise fail(
                     "key_conflict",
                     "This sender and key already identify a different task",
@@ -161,10 +172,10 @@ class Mailbox:
         identifier = uuid.uuid4().hex
         db.execute(
             """
-            INSERT INTO tasks(id, sender, agent, key, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+            INSERT INTO tasks(id, sender, agent, key, task, recovery_check, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
         """,
-            (identifier, sender, agent, key, task, now, now),
+            (identifier, sender, agent, key, task, recovery_check, now, now),
         )
         return self.get(db, now, identifier)
 

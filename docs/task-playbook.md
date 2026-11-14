@@ -3,6 +3,7 @@
 ## TUI commands
 
 - `/queue AGENT TASK` — queue a task for the named agent.
+- `/queue-check AGENT CHECK | TASK` — queue a task with a check to perform if its outcome becomes uncertain.
 - `/tasks` — list tasks and their current status.
 - `/task ID` — inspect a task and any recorded result.
 - `/reconcile ID` — recover a completed agent receipt for a task awaiting review. This is not a command to blindly rerun work.
@@ -12,6 +13,10 @@
 ## Ambiguous outcomes
 
 A timeout or worker exit does not prove that a tool had no effect. Ambiguous work stays in review until its receipt and effects can be checked. Do not automatically replay it. Reconciliation can recover a completed receipt; if no reliable receipt exists, record independently verified completion with `verified`, requeue when a retry is warranted, or cancel the task.
+
+## Recovery instruction recorded at submission
+
+For a note task, attach a check that names the effect key `playbook-note-v1`, the expected note `Review Moon handoff`, and the local fixture database. Confirm the stored receipt matches both the key and note. That receipt verifies one accepted note effect. If the receipt is missing, keep the task in review while you verify the database identity and check the stored note. Record an explicit resolution after checking the evidence. An approved retry uses the original effect key and note.
 
 ## Conceptual local receipt simulation
 

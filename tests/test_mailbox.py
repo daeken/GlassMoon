@@ -1,7 +1,9 @@
 import asyncio
+import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 from threading import Barrier
 from unittest.mock import AsyncMock, patch
@@ -82,7 +84,8 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rpc("get", id=task["id"])["attempts"], 2)
 
     async def test_dispatcher_records_reply_and_does_not_replay_it(self):
-        task = self.rpc("submit", **TASK)
+        check = "Look up the fixture receipt by effect key."
+        task = self.rpc("submit", **TASK, recovery_check=check)
         dispatcher = Dispatch("", "tools.mailbox", "tide")
 
         async def route(method, fields):
@@ -99,6 +102,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             done = await dispatcher.deliver()
             self.assertEqual(done["result"], "Ready")
             self.assertIn(task["id"], reply.await_args.args[3]["text"])
+            self.assertIn(check, reply.await_args.args[3]["text"])
             self.assertIsNone(await dispatcher.deliver())
         reply.assert_awaited_once()
 
@@ -304,3 +308,25 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result["status"], result["attempts"]), ("done", 1))
         self.assertEqual(result["result"], "Confirmed fixture receipt 1")
         self.assertIsNone(self.rpc("claim", agent="tide", lease_seconds=5)["task"])
+
+    def test_recovery_check_survives_migration_and_expiry(self):
+        legacy = self.rpc("submit", **TASK)
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("ALTER TABLE tasks DROP COLUMN recovery_check")
+        self.box = Mailbox(self.path, clock=lambda: self.now)
+        self.assertEqual(self.rpc("submit", **TASK)["id"], legacy["id"])
+        self.assertIsNone(self.rpc("get", id=legacy["id"])["recovery_check"])
+        self.rpc("claim", agent="tide", lease_seconds=2)
+
+        args = TASK | {"key": "note", "recovery_check": "Look up effect key note."}
+        task = self.rpc("submit", **args)
+        self.assertEqual(self.rpc("submit", **args)["id"], task["id"])
+        with self.assertRaises(RequestError) as conflict:
+            self.rpc("submit", **(args | {"recovery_check": "Altered check."}))
+        self.assertEqual(conflict.exception.code, "key_conflict")
+        self.rpc("claim", agent="tide", lease_seconds=5)
+        self.now += 6
+        self.box = Mailbox(self.path, clock=lambda: self.now)
+        expired = self.rpc("get", id=task["id"])
+        self.assertEqual(expired["status"], "review")
+        self.assertEqual(expired["recovery_check"], args["recovery_check"])

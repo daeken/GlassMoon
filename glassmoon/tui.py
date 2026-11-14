@@ -217,9 +217,11 @@ class Terminal:
             "status", f"{task['id']}  {task['status']}  revision {task['revision']}"
         )
         self.log("status", task["task"])
-        for field in ("result", "review_note"):
-            if task[field]:
-                self.log("status", task[field])
+        if task.get("recovery_check"):
+            self.log("status", f"Recovery check from submitter — {task['recovery_check']}")
+        for line in dict.fromkeys((task["result"], task["review_note"])):
+            if line:
+                self.log("status", line)
         for event in task.get("progress", [])[-8:]:
             detail = {
                 "started": "started",
@@ -258,17 +260,17 @@ class Terminal:
         )
         await self.show_task(identifier)
 
-    async def queue_task(self, agent, instruction):
+    async def queue_task(self, agent, instruction, recovery_check=None):
+        params = {
+            "sender": "operator",
+            "agent": agent,
+            "key": uuid.uuid4().hex,
+            "task": instruction,
+        }
+        if recovery_check is not None:
+            params["recovery_check"] = recovery_check
         task = await call_tool(
-            self.socket,
-            self.mailbox,
-            "submit",
-            {
-                "sender": "operator",
-                "agent": agent,
-                "key": uuid.uuid4().hex,
-                "task": instruction,
-            },
+            self.socket, self.mailbox, "submit", params
         )
         self.log(
             "status",
@@ -324,6 +326,7 @@ class Terminal:
                         self.active,
                         "/queue AGENT TASK  /tasks [AGENT]  /task ID  /reconcile ID",
                     )
+                    self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                 case "/status":
                     self.select("status")
@@ -336,12 +339,20 @@ class Terminal:
                 case "/tasks":
                     self.select("status")
                     self.start(lambda: self.list_tasks(argument.removeprefix("agent.")))
-                case "/queue" if " " in argument:
-                    agent, _, instruction = argument.partition(" ")
+                case "/queue" | "/queue-check" if " " in argument:
+                    agent, _, body = argument.partition(" ")
+                    recovery = None
+                    instruction = body.strip()
+                    if command == "/queue-check":
+                        check, separator, task = body.partition("|")
+                        if not separator or not check.strip() or not task.strip():
+                            self.log("status", "Usage /queue-check AGENT CHECK | TASK")
+                            return True
+                        recovery, instruction = check.strip(), task.strip()
                     self.select("status")
                     self.start(
                         lambda: self.queue_task(
-                            agent.removeprefix("agent."), instruction.strip()
+                            agent.removeprefix("agent."), instruction, recovery
                         )
                     )
                 case "/task" if argument:
