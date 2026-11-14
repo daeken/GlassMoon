@@ -79,6 +79,32 @@ class Dispatch:
             "If you cannot complete it, describe the blocker and any effects already observed."
         )
         heartbeat = asyncio.create_task(self.heartbeat(lease))
+        event_index = 0
+
+        async def on_chunk(event):
+            nonlocal event_index
+            if (
+                not isinstance(event, dict)
+                or event.get("type") != "tool"
+                or event_index >= 64
+            ):
+                return
+            event_index += 1
+            try:
+                async with asyncio.timeout(1):
+                    await self.rpc(
+                        "progress",
+                        lease
+                        | {
+                            "index": event_index,
+                            "name": event.get("name"),
+                            "phase": event.get("phase"),
+                        },
+                    )
+            except (*CONNECTION_ERRORS, RequestError):
+                # The receipt remains authoritative when telemetry is unavailable.
+                pass
+
         try:
             reply = None
             try:
@@ -93,6 +119,7 @@ class Dispatch:
                                 "attempt": task["attempts"],
                                 "text": message,
                             },
+                            on_chunk=on_chunk,
                         )
                     except RequestError as error:
                         if (
@@ -101,7 +128,11 @@ class Dispatch:
                         ):
                             raise
                         reply = await call(
-                            self.socket, self.agent, "chat", {"text": message}
+                            self.socket,
+                            self.agent,
+                            "chat",
+                            {"text": message},
+                            on_chunk=on_chunk,
                         )
             except RequestError as error:
                 retryable = error.code == "agent_busy" or (

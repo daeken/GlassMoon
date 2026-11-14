@@ -34,6 +34,10 @@ TOOLS = {
 }
 # Dispatcher operations stay available over IPC without being advertised to models.
 DISPATCH = {
+    "progress": tool(
+        "Record one tool lifecycle event under the active lease",
+        {"id": TEXT, "token": TEXT, "index": INTEGER, "name": TEXT, "phase": TEXT},
+    ),
     "claim": tool("Claim a queued task", {"agent": TEXT, "lease_seconds": INTEGER}),
     "renew": tool(
         "Renew an active lease", {"id": TEXT, "token": TEXT, "lease_seconds": INTEGER}
@@ -90,6 +94,12 @@ class Mailbox:
                     task_id TEXT NOT NULL REFERENCES tasks(id),
                     token TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL,
                     PRIMARY KEY(task_id, token)
+                );
+                CREATE TABLE IF NOT EXISTS task_progress (
+                    task_id TEXT NOT NULL REFERENCES tasks(id),
+                    attempt INTEGER NOT NULL, event_index INTEGER NOT NULL,
+                    name TEXT NOT NULL, phase TEXT NOT NULL, observed_at REAL NOT NULL,
+                    PRIMARY KEY(task_id, attempt, event_index)
                 );
             """)
 
@@ -162,7 +172,47 @@ class Mailbox:
         row = db.execute("SELECT * FROM tasks WHERE id=?", (id,)).fetchone()
         if row is None:
             raise fail("unknown_task", "Task does not exist")
-        return self.public(row)
+        task = self.public(row)
+        events = db.execute(
+            """
+            SELECT event_index, name, phase, observed_at FROM task_progress
+             WHERE task_id=? AND attempt=? ORDER BY event_index
+        """,
+            (id, row["attempts"]),
+        ).fetchall()
+        task["progress"] = [dict(event) for event in events]
+        return task
+
+    def progress(self, db, now, id, token, index, name, phase):
+        index = number(index, 1, 64, "event index")
+        name = label(name, "tool name")
+        if phase not in ("started", "finished", "failed"):
+            raise fail("invalid_phase", "Expected a tool lifecycle phase")
+        task = db.execute(
+            "SELECT attempts FROM tasks WHERE id=? AND token=? AND status='running'",
+            (id, token),
+        ).fetchone()
+        if not task:
+            raise fail("stale_lease", "Task is no longer owned by that lease")
+        previous = db.execute(
+            """
+            SELECT name, phase FROM task_progress
+            WHERE task_id=? AND attempt=? AND event_index=?
+        """,
+            (id, task["attempts"], index),
+        ).fetchone()
+        if previous is not None:
+            if (previous["name"], previous["phase"]) != (name, phase):
+                raise fail(
+                    "progress_conflict",
+                    "This event index already identifies a different tool event",
+                )
+            return {"recorded": True}
+        db.execute(
+            "INSERT INTO task_progress VALUES (?, ?, ?, ?, ?, ?)",
+            (id, task["attempts"], index, name, phase, now),
+        )
+        return {"recorded": True}
 
     def list_tasks(self, db, _now, agent=None, status=None, before=None, limit=20):
         if agent is not None:

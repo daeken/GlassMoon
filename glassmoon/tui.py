@@ -220,6 +220,13 @@ class Terminal:
         for field in ("result", "review_note"):
             if task[field]:
                 self.log("status", task[field])
+        for event in task.get("progress", [])[-8:]:
+            detail = {
+                "started": "started",
+                "finished": "returned",
+                "failed": "reported an error",
+            }[event["phase"]]
+            self.log("status", f"  {event['name']}  {detail}")
         if task["status"] == "review":
             self.log(
                 "status",

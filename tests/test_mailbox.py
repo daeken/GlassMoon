@@ -109,7 +109,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         async def route(method, fields):
             return self.rpc(method, **fields)
 
-        async def waiting(*_):
+        async def waiting(*_, **_options):
             started.set()
             await asyncio.Event().wait()
 
@@ -193,7 +193,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         async def route(method, fields):
             return self.rpc(method, **fields)
 
-        async def agent(_socket, _service, method, _params):
+        async def agent(_socket, _service, method, _params, **_options):
             if method == "task_receipt":
                 return {"status": "started"}
             raise RequestError(
@@ -218,7 +218,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         async def route(method, fields):
             return self.rpc(method, **fields)
 
-        async def agent(_socket, _service, method, _params):
+        async def agent(_socket, _service, method, _params, **_options):
             methods.append(method)
             if method == "run_task":
                 raise EOFError
@@ -234,4 +234,46 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (done["id"], done["status"], done["result"]),
             (task["id"], "done", "Saved once"),
+        )
+
+    async def test_tool_progress_records_metadata_and_survives_review(self):
+        task = self.rpc("submit", **TASK)
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+
+        async def route(method, fields):
+            return self.rpc(method, **fields)
+
+        async def agent(_socket, _service, method, _params, **options):
+            if method == "task_receipt":
+                return {"status": "started"}
+            await options["on_chunk"](
+                {
+                    "type": "tool",
+                    "phase": "started",
+                    "name": "save_note",
+                    "arguments": "synthetic-secret-payload",
+                }
+            )
+            raise EOFError
+
+        with (
+            patch.object(dispatcher, "online", AsyncMock(return_value=True)),
+            patch.object(dispatcher, "rpc", side_effect=route),
+            patch("glassmoon.dispatcher.call", side_effect=agent),
+        ):
+            result = await dispatcher.deliver()
+        self.assertEqual(result["status"], "review")
+        reopened = Mailbox(self.path, clock=lambda: self.now).request(
+            "get", {"id": task["id"]}
+        )
+        self.assertEqual(
+            reopened["progress"],
+            [
+                {
+                    "event_index": 1,
+                    "name": "save_note",
+                    "phase": "started",
+                    "observed_at": 100.0,
+                },
+            ],
         )

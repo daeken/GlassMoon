@@ -263,13 +263,19 @@ class Agent:
                     output = json.dumps(result, ensure_ascii=False)
                 exchange["outputs"][item["id"]] = output
                 if stream:
+                    failed = (
+                        "error" in result
+                        or result.get("exit_code", 0)
+                        or (
+                            isinstance(value, dict)
+                            and (value.get("isError") is True or "error" in value)
+                        )
+                    )
                     await emit(
                         {
                             "type": "tool",
                             "name": item["name"],
-                            "phase": "failed"
-                            if "error" in result or result.get("exit_code", 0)
-                            else "finished",
+                            "phase": "failed" if failed else "finished",
                         }
                     )
         raise AssertionError("Tool loop exhausted")
