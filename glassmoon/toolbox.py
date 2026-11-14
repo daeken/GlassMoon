@@ -132,6 +132,7 @@ def main():
                 service.handle,
                 staged=args.staged,
                 reconnect=True,
+                maintainer=args.maintainer,
             )
         )
     except KeyboardInterrupt:

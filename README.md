@@ -241,6 +241,8 @@ Use a fresh service name or stop any existing worker before starting the supervi
 
 The supervisor waits through a broker outage while the worker is still running. When the broker is reachable again, the worker has the configured probe timeout to re-register before failed probes count toward a restart.
 
+Workers can declare a maintainer with `--maintainer AGENT`. `/services` and `/describe` show the declaration for that generation. `/maintain SERVICE TASK` queues work for the current generation's maintainer and records the service and generation in the task. Use `SERVICE#GENERATION` to require a specific active generation at lookup. The maintainer can receive the task after coming online.
+
 ### Recover after a broker restart
 
 The agent, browser, mailbox, model providers and router, Python tool publisher, MCP bridge, and desktop service reconnect when their broker socket returns. Promoted staged workers join this recovery when reconnect is enabled and the broker has sent their activation notice. An unpromoted candidate needs a fresh probe after losing the broker. The TUI restores its lifecycle feed with a fresh snapshot. Existing browser windows and agent state remain available when their own workers survive. In-flight calls whose connection was lost may have run, so task receipts and review govern their recovery.

@@ -208,6 +208,21 @@ impl Broker {
             );
             return;
         }
+        if interface.maintainer.as_ref().is_some_and(|name| {
+            name.is_empty()
+                || name.len() > 90
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        }) {
+            self.error(
+                peer,
+                id,
+                "invalid_maintainer",
+                "Supply a GlassMoon agent identity",
+            );
+            return;
+        }
         client.registered = true;
         self.generations.insert(
             peer,
@@ -518,6 +533,9 @@ impl Broker {
         });
         if let Some(kind) = service.interface.kind {
             summary["kind"] = json!(kind);
+        }
+        if let Some(maintainer) = &service.interface.maintainer {
+            summary["maintainer"] = json!(maintainer);
         }
         summary
     }

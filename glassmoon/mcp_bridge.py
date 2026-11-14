@@ -102,6 +102,7 @@ async def run(args):
             METHODS,
             service.handle,
             reconnect=True,
+            maintainer=args.maintainer,
         )
 
 
@@ -110,6 +111,7 @@ def main():
     parser.add_argument("--socket", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--replace", type=int)
+    parser.add_argument("--maintainer", help="GlassMoon agent identity responsible for this service")
     parser.add_argument("--url", help="Streamable HTTP MCP endpoint")
     parser.add_argument(
         "--bearer-env", help="Environment variable containing a remote bearer token"

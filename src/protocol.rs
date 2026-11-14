@@ -75,6 +75,8 @@ pub struct Interface {
     pub methods: BTreeMap<String, Method>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<InterfaceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintainer: Option<String>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]

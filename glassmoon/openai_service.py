@@ -364,6 +364,7 @@ async def run(args):
                 provider.handle,
                 kind="model_provider",
                 reconnect=True,
+                maintainer=args.maintainer,
             )
     finally:
         transcripts.close()

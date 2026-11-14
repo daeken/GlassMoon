@@ -17,6 +17,7 @@ from glassmoon.release import release
 from glassmoon.service import serve
 from glassmoon.toolbox import METHODS as TOOL_METHODS
 from glassmoon.toolbox import ToolService, tool
+from glassmoon.tui import Terminal
 
 BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
@@ -185,7 +186,8 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             _, previous = await self.register_old(stack, socket)
             staged = await stack.enter_async_context(connect(socket))
             registration = await staged.request(
-                "register", "register", name="echo", interface_version=2, methods=METHODS
+                "register", "register", name="echo", interface_version=2,
+                methods=METHODS, maintainer="moon",
             )
             latest = registration["result"]["generation"]
             await staged.send("promote", id="stale", expected_active=None)
@@ -196,6 +198,22 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.receive())["error"]["code"], "interface_mismatch")
             description = await client.request("describe", "describe", generation=latest)
             self.assertEqual(description["result"]["interface_version"], 2)
+            self.assertEqual(description["result"]["maintainer"], "moon")
+
+            terminal = Terminal(None, socket)
+            queue = AsyncMock()
+            with patch.object(terminal, "queue_task", queue):
+                terminal.input = f"/maintain echo#{previous} Stale handoff"
+                terminal.submit()
+                await asyncio.gather(*terminal.tasks)
+                queue.assert_not_awaited()
+                terminal.input = f"/maintain echo#{latest} Inspect the promoted worker"
+                terminal.submit()
+                await asyncio.gather(*terminal.tasks)
+            arguments = queue.await_args.args
+            self.assertEqual(arguments[0], "moon")
+            self.assertIn(str(latest), arguments[1])
+            self.assertIn("Inspect the promoted worker", arguments[1])
 
     async def test_pre_promotion_probe_targets_only_staged_generation(self):
         async with AsyncExitStack() as stack, asyncio.timeout(10):

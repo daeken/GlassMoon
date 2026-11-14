@@ -72,6 +72,7 @@ async def serve(
     handler,
     *,
     kind=None,
+    maintainer=None,
     on_ready=None,
     staged=False,
     reconnect=False,
@@ -99,6 +100,7 @@ async def serve(
                 methods,
                 handler,
                 kind=kind,
+                maintainer=maintainer,
                 on_ready=registered,
                 staged=staged,
                 set_active=set_active,
@@ -118,7 +120,7 @@ async def serve(
 
 
 async def _serve_connection(
-    socket, name, replace, methods, handler, *, kind, on_ready, staged, set_active
+    socket, name, replace, methods, handler, *, kind, maintainer, on_ready, staged, set_active
 ):
     async with connect(socket) as wire:
         registration = await wire.request(
@@ -128,6 +130,7 @@ async def _serve_connection(
             interface_version=1,
             methods=methods,
             kind=kind,
+            maintainer=maintainer,
             activation_notice=staged,
         )
         if not staged:
@@ -175,6 +178,7 @@ def service_args(description, name):
 def add_service_args(parser, name):
     parser.add_argument("--socket", required=True)
     parser.add_argument("--name", default=name)
+    parser.add_argument("--maintainer", help="GlassMoon agent identity responsible for this service")
     parser.add_argument(
         "--replace", type=int, help="Expected active generation to replace"
     )

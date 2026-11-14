@@ -44,6 +44,7 @@ def main():
                 {"models": CATALOG, "generate": GENERATE},
                 handle,
                 kind="model_provider",
+                maintainer=args.maintainer,
             )
         )
     except KeyboardInterrupt:

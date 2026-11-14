@@ -536,6 +536,7 @@ async def run(args):
             METHODS,
             agent.handle,
             reconnect=True,
+            maintainer=args.maintainer,
         )
     finally:
         transcripts.close()

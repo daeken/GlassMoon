@@ -512,6 +512,7 @@ async def run(args):
                 METHODS,
                 service.handle,
                 reconnect=True,
+                maintainer=args.maintainer,
             )
         finally:
             await browser.close()

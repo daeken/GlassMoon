@@ -317,6 +317,7 @@ async def run(args):
             adapter.handle,
             kind="model_provider",
             reconnect=True,
+            maintainer=args.maintainer,
         )
 
 

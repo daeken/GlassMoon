@@ -62,11 +62,12 @@ class Terminal:
             self.services.items(),
             key=lambda entry: (entry[1]["name"], entry[0]),
         ):
+            maintainer = f"  maintainer {service['maintainer']}" if service.get("maintainer") else ""
             self.log(
                 "status",
                 f"{service['name']} #{generation} {service['state']}  "
                 f"interface {service['interface_version']}  "
-                f"{service.get('in_flight', '?')} in flight",
+                f"{service.get('in_flight', '?')} in flight{maintainer}",
             )
 
     async def watch(self):
@@ -401,6 +402,21 @@ class Terminal:
             f"Queued {task['id']} for {agent}. Use /task {task['id']} to check it.",
         )
 
+    async def queue_maintainer(self, service, instruction, generation=None):
+        async with connect(self.socket) as wire:
+            rows = (await wire.request("list", "list"))["result"]["services"]
+        active = next((row for row in rows if row["name"] == service and row["state"] == "active"), None)
+        if generation is not None and (not active or active["generation"] != generation):
+            self.log("status", f"{service} changed generation. Check /services before queuing the task.")
+            return
+        if not active or not active.get("maintainer"):
+            self.log("status", f"No maintainer is declared for active service {service}.")
+            return
+        await self.queue_task(
+            active["maintainer"],
+            f"Service {service}, generation {active['generation']} at submission.\n\n{instruction}",
+        )
+
     def start(self, operation, window="status"):
         async def run():
             try:
@@ -458,6 +474,7 @@ class Terminal:
                     self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
                     self.log(self.active, "/more-tasks pages through your last task list")
+                    self.log(self.active, "/maintain SERVICE[#GENERATION] TASK queues work for the maintainer")
                     self.log(self.active, "/tool enable|disable|default SERVICE in an agent window")
                     self.log(self.active, "/older browses earlier messages. /latest returns to live chat.")
                 case "/status":
@@ -486,6 +503,15 @@ class Terminal:
                 case "/more-tasks":
                     self.select("status")
                     self.start(self.more_tasks)
+                case "/maintain" if " " in argument:
+                    target, _, instruction = argument.partition(" ")
+                    service, marker, generation = target.partition("#")
+                    if marker and (not generation.isascii() or not generation.isdecimal()):
+                        self.log("status", "Usage /maintain SERVICE[#GENERATION] TASK")
+                        return True
+                    expected = int(generation) if marker else None
+                    self.select("status")
+                    self.start(lambda: self.queue_maintainer(service, instruction.strip(), expected))
                 case "/queue" | "/queue-check" if " " in argument:
                     agent, _, body = argument.partition(" ")
                     recovery = None
