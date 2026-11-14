@@ -24,6 +24,8 @@ def manifest(path):
         data = tomllib.load(source)
     if not command_array(data.get("broker")):
         raise ValueError("Manifest needs a broker command array of strings")
+    if "dispatcher" in data and not command_array(data["dispatcher"]):
+        raise ValueError("Manifest dispatcher needs a command array of strings")
     workers = data.get("worker", [])
     if not isinstance(workers, list):
         raise TypeError("Workers use [[worker]] entries")
@@ -222,6 +224,9 @@ class Stack:
                 await self.readiness(
                     process, worker.get("service", name), worker.get("probe")
                 )
+            dispatcher = None
+            if not smoke and "dispatcher" in self.config:
+                dispatcher = await self.start_process(stack, "dispatcher", self.config["dispatcher"])
             print(
                 json.dumps(
                     {
@@ -238,6 +243,8 @@ class Stack:
             waits = {
                 asyncio.create_task(process.wait()): name for name, process in processes
             }
+            if dispatcher is not None:
+                waits[asyncio.create_task(dispatcher.wait())] = "dispatcher"
             try:
                 while True:
                     done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)

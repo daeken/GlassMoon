@@ -17,6 +17,12 @@ The launcher checks registration and configured readiness probes, logs each chil
 
 Use `--restart-broker` with workers that support reconnecting. The launcher replaces the broker once after an exit and waits for its workers to register and pass their readiness probes.
 
+To run the dispatcher alongside a persistent stack, add a top-level `dispatcher` command to the manifest. The launcher starts it after the worker readiness checks and saves its output in `dispatcher.log`. The smoke run checks readiness and exits before dispatching tasks.
+
+```toml
+dispatcher = ["{python}", "-m", "glassmoon.dispatcher", "--socket", "{socket}", "--discover"]
+```
+
 ## Chat with an agent
 
 To return to a stack that's still running, set `GLASSMOON_SOCKET` to its existing socket and open the terminal client with `uv run --locked python -m glassmoon.tui --socket "$GLASSMOON_SOCKET" --query moon`. Use `/handoff` to review recent work. Use `--resume` after a stack has stopped.

@@ -113,6 +113,35 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
                         process.terminate()
                         await asyncio.wait_for(process.wait(), 10)
 
+    async def test_manifest_dispatcher_delivers_queued_work_while_stack_runs(self):
+        with TemporaryDirectory(prefix="gm-stack-dispatch-", dir="/tmp") as root:
+            root = Path(root)
+            manifest_path = root / "stack.toml"
+            definition = Path("examples/offline-stack.toml").read_text()
+            dispatcher = 'dispatcher = ["{python}", "-m", "glassmoon.dispatcher", "--socket", "{socket}", "--discover", "--interval", "0.1"]\n'
+            manifest_path.write_text(dispatcher + definition)
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "glassmoon.stack", manifest_path,
+                "--state", root / "state", stdout=asyncio.subprocess.PIPE,
+            )
+            try:
+                async with asyncio.timeout(10):
+                    socket_path = json.loads(await process.stdout.readline())["socket"]
+                    task = await call_tool(socket_path, "tools.mailbox", "submit", {
+                        "sender": "operator", "agent": "moon", "key": "verify", "task": "Offline manifest delivery",
+                    })
+                    while True:
+                        found = await call_tool(socket_path, "tools.mailbox", "get", {"id": task["id"]})
+                        if found["status"] == "done":
+                            break
+                        await asyncio.sleep(.1)
+                    self.assertEqual(found["attempts"], 1)
+                    self.assertIn("Offline manifest delivery", found["result"])
+            finally:
+                if process.returncode is None:
+                    process.terminate()
+                    await asyncio.wait_for(process.wait(), 5)
+
     async def test_independent_offline_stacks_do_not_share_tasks(self):
         with TemporaryDirectory(prefix="gm-stack-", dir="/tmp") as root:
             processes = []
