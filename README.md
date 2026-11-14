@@ -39,7 +39,7 @@ uv run --locked python -m glassmoon.agent --socket "$GLASSMOON_SOCKET" --name mo
 uv run --locked python -m glassmoon.tui --socket "$GLASSMOON_SOCKET" --query moon
 ```
 
-Type a message to chat. Use `/query NAME` to open another agent, F2 to cycle windows, and Page Up or Page Down to scroll. The status window shows service lifecycle events. `/services` refreshes generation state and in-flight counts, `/describe NAME|ID` shows an interface, and `/models` lists active catalogs. Use `/quit` to exit.
+Type a message to chat. Use `/query NAME` to open another agent, F2 to cycle windows, and Page Up or Page Down to scroll. The status window shows service lifecycle events. `/services` refreshes generation state, in-flight counts, and the time remaining for draining workers. `/describe NAME|ID` shows an interface, and `/models` lists active catalogs. Use `/quit` to exit.
 
 Each agent saves its transcript in a local SQLite database keyed by name. `--state` sets the database path. The agent sends recent complete turns within the IPC frame budget and retains the full committed history on disk. `--provider` and `--model` set its default pin. Use `/model PROVIDER` or `/model PROVIDER/MODEL` in an agent's window to change selection for the next turn. `/model auto` selects by capabilities, and `/model default` restores the startup selection. `/model` shows both the saved preference and the model last used in a saved turn. The agent preserves its transcript across these changes. The next turn reports when a pinned model is unavailable. A selected provider can receive the conversation context, including when it summarizes earlier turns.
 

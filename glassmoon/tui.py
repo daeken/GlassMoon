@@ -66,11 +66,13 @@ class Terminal:
             key=lambda entry: (entry[1]["name"], entry[0]),
         ):
             maintainer = f"  maintainer {service['maintainer']}" if service.get("maintainer") else ""
+            remaining = service.get("drain_remaining_ms")
+            drain = f"  drain deadline in {remaining / 1000:.1f}s" if remaining is not None else ""
             self.log(
                 "status",
                 f"{service['name']} #{generation} {service['state']}  "
                 f"interface {service['interface_version']}  "
-                f"{service.get('in_flight', '?')} in flight{maintainer}",
+                f"{service.get('in_flight', '?')} in flight{maintainer}{drain}",
             )
 
     async def watch(self):

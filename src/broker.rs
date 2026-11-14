@@ -565,6 +565,13 @@ impl Broker {
         if let Some(maintainer) = &service.interface.maintainer {
             summary["maintainer"] = json!(maintainer);
         }
+        if let State::Draining { deadline } = service.state {
+            summary["drain_remaining_ms"] = json!(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+            );
+        }
         summary
     }
 

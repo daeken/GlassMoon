@@ -201,6 +201,9 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
                 update = await watcher.receive()
                 self.assertEqual(update["event"], event)
                 self.assertEqual(update["service"]["generation"], generation)
+                if event == "draining":
+                    self.assertGreater(update["service"]["drain_remaining_ms"], 0)
+                    self.assertLessEqual(update["service"]["drain_remaining_ms"], 5000)
 
             await self.call(client, "new", "after")
             reply = await client.receive()
