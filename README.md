@@ -205,7 +205,7 @@ Use `share_checked` to verify the exact visible text of one CSS-matched element 
 
 Use `/evidence OWNER` to find published keys and `/evidence OWNER KEY` to inspect a reproduction summary and its metadata. `/save-image OWNER KEY PATH` checks the digest and creates a new local file with owner-only permissions. Choose an unused destination.
 
-The mailbox tool `attach_evidence` links a published owner and key to a task. `/task` and `/timeline` display the reference so recipients and operators can look up the same observation.
+Use `/link-evidence TASK OWNER KEY [ATTEMPT]` to confirm a published observation exists and link it to a task. Agents can also link it with the mailbox tool `attach_evidence`. `/task` and `/timeline` display the reference so recipients and operators can look up the same observation.
 
 ### Attach the macOS desktop
 

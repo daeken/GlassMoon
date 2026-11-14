@@ -660,3 +660,20 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((row["attempts"], row["evidence"][0]["attempt"]), (2, 1))
         event = self.rpc("timeline", id=task["id"])["events"][0]
         self.assertEqual((event["kind"], event["attempt"]), ("evidence_attached", 1))
+
+    async def test_terminal_reads_evidence_before_linking_a_task_attempt(self):
+        terminal = Terminal(None, "ipc")
+        evidence = {"owner": "moon", "key": "screenshot"}
+        fields = evidence | {"id": "task", "attempt": 2}
+        reader = AsyncMock(side_effect=[{"summary": "Fixture"}, fields])
+        with patch("glassmoon.tui.call_tool", reader):
+            await terminal.link_evidence("task moon screenshot 2")
+        self.assertEqual([call.args for call in reader.await_args_list], [
+            ("ipc", "tools.evidence", "read", evidence),
+            ("ipc", "tools.mailbox", "attach_evidence", fields),
+        ])
+        self.assertIn("(attempt 2)", terminal.windows["status"][-1])
+        rejected = AsyncMock(side_effect=RequestError({"code": "evidence_missing", "message": "Missing"}))
+        with patch("glassmoon.tui.call_tool", rejected), self.assertRaises(RequestError):
+            await terminal.link_evidence("task moon missing")
+        rejected.assert_awaited_once()

@@ -442,6 +442,23 @@ class Terminal:
         await call_tool(self.socket, self.mailbox, "reconcile", {"id": identifier})
         await self.show_task(identifier)
 
+    async def link_evidence(self, argument):
+        fields = argument.split()
+        if len(fields) not in (3, 4) or (
+            len(fields) == 4 and not (fields[3].isascii() and fields[3].isdecimal())
+        ):
+            self.log("status", "Usage /link-evidence TASK OWNER KEY [ATTEMPT]")
+            return
+        identifier, owner, key = fields[:3]
+        reference = {"owner": owner, "key": key}
+        await call_tool(self.socket, self.evidence, "read", reference)
+        params = {"id": identifier, **reference}
+        if len(fields) == 4:
+            params["attempt"] = int(fields[3])
+        linked = await call_tool(self.socket, self.mailbox, "attach_evidence", params)
+        attempt = f" (attempt {linked['attempt']})" if "attempt" in linked else ""
+        self.log("status", f"Linked {owner}/{key} to task {identifier}{attempt}.")
+
     async def task_timeline(self, argument):
         identifier, separator, cursor = argument.partition(" ")
         params = {"id": identifier}
@@ -695,6 +712,7 @@ class Terminal:
                     self.log(self.active, "/watch-task ID follows a task. Repeat to stop watching.")
                     self.log(self.active, "/save-image OWNER KEY PATH saves a shared screenshot")
                     self.log(self.active, "/evidence OWNER [KEY] lists or shows shared observations")
+                    self.log(self.active, "/link-evidence TASK OWNER KEY [ATTEMPT] links a shared observation")
                     self.log(self.active, "/children ID lists tasks delegated from that task")
                     self.log(self.active, "/review [PARENT] lists tasks with uncertain outcomes")
                     self.log(self.active, "/more-tasks pages through your last task list")
@@ -784,6 +802,9 @@ class Terminal:
                 case "/evidence" if argument:
                     self.select("status")
                     self.start(lambda: self.show_evidence(argument))
+                case "/link-evidence" if argument:
+                    self.select("status")
+                    self.start(lambda: self.link_evidence(argument))
                 case "/children" if argument:
                     self.select("status")
                     self.start(lambda: self.list_tasks(parent=argument))
