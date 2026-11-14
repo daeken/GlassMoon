@@ -8,7 +8,9 @@ from .ipc import ProtocolError, RequestError, call, connect
 from .service import fail
 
 
-async def release(socket, generation, probe, params, expected, timeout=8):
+async def release(socket, generation, probe, params, expected, timeout=8, *, check_only=False):
+    if not isinstance(expected, dict) or not expected or not isinstance(params, dict):
+        raise fail("invalid_probe", "Supply probe parameters and at least one expected result field")
     async with asyncio.timeout(timeout), connect(socket) as wire:
         interface = (
             await wire.request("describe", "interface", generation=generation)
@@ -43,6 +45,11 @@ async def release(socket, generation, probe, params, expected, timeout=8):
                 "probe_mismatch",
                 f"Staged generation {generation} failed {service}.{probe}",
             )
+        if check_only:
+            return {
+                "name": service, "generation": generation, "previous": previous,
+                "probe": probe, "probe_passed": True,
+            }
         return (
             await wire.request(
                 "activate",
@@ -61,6 +68,7 @@ def main():
     parser.add_argument("--params", type=json.loads, default={})
     parser.add_argument("--expect", type=json.loads, required=True)
     parser.add_argument("--timeout", type=float, default=8)
+    parser.add_argument("--check-only", action="store_true", help="Probe the candidate without activating it")
     args = parser.parse_args()
     if (
         not isinstance(args.params, dict)
@@ -81,6 +89,7 @@ def main():
                 args.params,
                 args.expect,
                 args.timeout,
+                check_only=args.check_only,
             )
         )
     except (RequestError, ProtocolError, EOFError, OSError, TimeoutError) as error:

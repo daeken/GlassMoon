@@ -246,6 +246,16 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(received["params"], {"value": "check"})
 
             version = "v2"
+            checked = await release(
+                socket, generation, "echo", {"value": "test"}, {"version": "v2"}, check_only=True,
+            )
+            self.assertTrue(checked["probe_passed"])
+            async with connect(socket) as observer:
+                snapshot = (await observer.request("list", "after-probe"))["result"]["services"]
+            self.assertEqual(
+                {row["generation"]: row["state"] for row in snapshot},
+                {previous: "active", generation: "staged"},
+            )
             promoted = await release(socket, generation, "echo", {"value": "test"}, {"version": "v2"})
             self.assertEqual((promoted["previous"], promoted["generation"]), (previous, generation))
             self.assertEqual(await call(socket, "echo", "echo", {"value": 1}), {"version": "v2"})

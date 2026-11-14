@@ -227,6 +227,8 @@ uv run --locked python -m glassmoon.release --socket "$GLASSMOON_SOCKET" GENERAT
 
 The release command sends the probe to the specified generation and compares the result before attempting activation. The broker checks that the active generation still matches the one observed before the probe. A failed probe leaves normal traffic on its current route. A draining generation can finish its existing calls.
 
+Add `--check-only` to run the probe while leaving the candidate staged. A later release probes it again before activation.
+
 ### Supervise a local worker
 
 Moon wrote the `moon.text` example service, which fingerprints UTF-8 text and exposes a deterministic health probe. The supervisor starts a worker, validates probe fields, restarts it after repeated failures or process exit, and can send an incident to a named maintainer agent.
