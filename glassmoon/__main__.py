@@ -36,6 +36,11 @@ async def run(args):
     async with connect(args.socket) as wire:
         match args.command:
             case "discard":
+                if "discard" not in wire.features:
+                    raise RequestError({
+                        "code": "unsupported_discard",
+                        "message": "Update the broker before discarding a staged generation",
+                    })
                 reply = await wire.request("discard", "cli", generation=args.generation)
                 print_json(reply["result"])
             case "describe":

@@ -119,7 +119,7 @@ impl Broker {
                 self.ok(
                     peer,
                     &id,
-                    json!({ "protocol": VERSION, "features": ["generation_calls"] }),
+                    json!({ "protocol": VERSION, "features": ["generation_calls", "discard"] }),
                 );
             } else {
                 self.error(
