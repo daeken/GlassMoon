@@ -512,7 +512,8 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             ],
         }
         unavailable = RequestError({"code": "unavailable", "message": "No active mailbox"})
-        responses = [running, EOFError(), unavailable, running, running | {
+        disconnected = RequestError({"code": "service_disconnected", "message": "Mailbox retired"}, generation=5)
+        responses = [running, disconnected, EOFError(), unavailable, running, running | {
             "revision": 3, "status": "done",
         }]
         terminal = Terminal(None, "unused")
@@ -521,7 +522,7 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             patch("glassmoon.tui.asyncio.sleep", AsyncMock()) as sleep,
         ):
             await terminal.watch_task("fixture")
-        self.assertEqual([item.args[0] for item in sleep.await_args_list], [1, 1, 2, 1])
+        self.assertEqual([item.args[0] for item in sleep.await_args_list], [1, 1, 2, 4, 1])
         lines = list(terminal.windows["status"])
         self.assertEqual(sum("waiting" in line for line in lines), 1)
         self.assertEqual(sum("reconnected" in line for line in lines), 1)

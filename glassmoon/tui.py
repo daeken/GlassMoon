@@ -474,9 +474,9 @@ class Terminal:
                 async with asyncio.timeout(5):
                     row = await call_tool(self.socket, self.mailbox, "get", {"id": identifier})
             except (EOFError, OSError, ProtocolError, TimeoutError, RequestError) as error:
-                if isinstance(error, RequestError) and (
-                    error.generation is not None or error.code not in {"busy", "unavailable"}
-                ):
+                if isinstance(error, RequestError) and error.code not in {
+                    "busy", "unavailable", "service_disconnected", "drain_timeout",
+                }:
                     raise
                 if retry_delay == 1:
                     self.log("status", f"Task {identifier} watch waiting for the mailbox.")
