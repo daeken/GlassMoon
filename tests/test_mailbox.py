@@ -453,6 +453,28 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         observed = [line.split()[0] for line in terminal.windows["status"] if "outcome unknown" in line]
         self.assertEqual(observed, list(reversed(ids)))
 
+    async def test_terminal_watch_reports_changes_and_stops_at_review(self):
+        states = [
+            {"revision": 1, "attempts": 0, "status": "queued"},
+            {"revision": 1, "attempts": 0, "status": "queued"},
+            {"revision": 2, "attempts": 1, "status": "running", "progress": [
+                {"event_index": 1, "name": "fixture", "phase": "started"},
+            ]},
+            {"revision": 3, "attempts": 1, "status": "review"},
+        ]
+        terminal = Terminal(None, "unused")
+        with (
+            patch("glassmoon.tui.call_tool", AsyncMock(side_effect=states)),
+            patch("glassmoon.tui.asyncio.sleep", AsyncMock()),
+        ):
+            terminal.toggle_task_watch("fixture")
+            await asyncio.gather(*terminal.tasks)
+        lines = list(terminal.windows["status"])
+        self.assertEqual(sum("queued" in line for line in lines), 1)
+        self.assertTrue(any("fixture  started" in line for line in lines))
+        self.assertTrue(any("review" in line for line in lines))
+        self.assertEqual(terminal.watched_tasks, {})
+
     def test_cancel_unclaimed_task_without_disrupting_an_admitted_worker(self):
         task = self.rpc("submit", **TASK)
         options = {

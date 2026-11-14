@@ -50,6 +50,7 @@ class Terminal:
         self.history_index = 0
         self.task_page = None
         self.task_list_lock = asyncio.Lock()
+        self.watched_tasks = {}
         self.dirty = True
 
     def log(self, window, text):
@@ -399,6 +400,35 @@ class Terminal:
         if page["before"] is not None:
             self.log("status", f"Use /timeline {identifier} {page['before']} for earlier events.")
 
+    async def watch_task(self, identifier):
+        revision = None
+        last_event = None
+        while True:
+            row = await call_tool(self.socket, self.mailbox, "get", {"id": identifier})
+            progress = row.get("progress", [])
+            if row["revision"] != revision:
+                self.log("status", f"Task {identifier}  {row['status']}  attempt {row['attempts']}")
+                revision = row["revision"]
+            if progress:
+                event = progress[-1]
+                event_key = (row["attempts"], event["event_index"])
+                if event_key != last_event:
+                    self.log("status", f"  {event['name']}  {event['phase']}")
+                    last_event = event_key
+            if row["status"] in ("done", "review", "cancelled"):
+                self.log("status", f"Use /task {identifier} to read the result.")
+                return
+            await asyncio.sleep(1)
+
+    def toggle_task_watch(self, identifier):
+        if identifier in self.watched_tasks:
+            self.watched_tasks[identifier].cancel()
+            self.log("status", f"Stopped watching {identifier}.")
+            return
+        task = self.start(lambda: self.watch_task(identifier))
+        self.watched_tasks[identifier] = task
+        task.add_done_callback(lambda _: self.watched_tasks.pop(identifier, None))
+
     async def save_evidence(self, argument):
         parts = argument.split(maxsplit=2)
         if len(parts) != 3:
@@ -513,6 +543,7 @@ class Terminal:
         task = asyncio.create_task(run())
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+        return task
 
     def select(self, window):
         self.active = window
@@ -551,6 +582,7 @@ class Terminal:
                     self.log(self.active, "/queue-check AGENT CHECK | TASK")
                     self.log(self.active, "/resolve ID REVISION ACTION NOTE")
                     self.log(self.active, "/timeline ID [BEFORE] shows recorded task events")
+                    self.log(self.active, "/watch-task ID follows a task. Repeat to stop watching.")
                     self.log(self.active, "/save-image OWNER KEY PATH saves a shared screenshot")
                     self.log(self.active, "/evidence OWNER [KEY] lists or shows shared observations")
                     self.log(self.active, "/children ID lists tasks delegated from that task")
@@ -624,6 +656,9 @@ class Terminal:
                 case "/timeline" if argument:
                     self.select("status")
                     self.start(lambda: self.task_timeline(argument))
+                case "/watch-task" if argument:
+                    self.select("status")
+                    self.toggle_task_watch(argument)
                 case "/save-image" if argument:
                     self.select("status")
                     self.start(lambda: self.save_evidence(argument))
