@@ -2,6 +2,30 @@
 
 GlassMoon is an agentic coding harness built around a local IPC broker. It supports live service replacement, persistent agent conversations, and capability-based model selection.
 
+## Run GlassMoon in the background on macOS
+
+From the checkout, build the broker, sync its Python environment, and install the per-user LaunchAgent. With no options, this starts the offline example and stores its data under `~/.local/state/glassmoon/service`.
+
+```sh
+cargo build --locked
+uv sync --locked
+./scripts/glassmoon-service install
+./scripts/glassmoon-tui
+```
+
+To use your own stack, supply its manifest and state directory on install. Point `--state` at an existing stack directory from the same checkout to pick up its conversations and tasks. Stop the foreground copy first.
+
+```sh
+./scripts/glassmoon-service install --manifest /path/to/stack.toml --state /path/to/state
+./scripts/glassmoon-tui moon
+```
+
+The background stack runs while you're logged in and starts again at login. Use `./scripts/glassmoon-service status` for the socket, log directory, and bootstrap status. `stop` keeps it stopped across logins, `start` re-enables it, `restart` picks up changes to the manifest's worker and dispatcher definitions, and `uninstall` removes the LaunchAgent. State and logs stay on disk. Reinstall after changing the manifest's broker command. For multiple stacks, install with a separate `--state` directory and put `--label YOUR_LABEL` before the subcommand or agent name on both scripts.
+
+The broker starts `system.bootstrap`, which starts workers in manifest order, checks their readiness, and starts the optional dispatcher after the workers are ready. Bootstrap retries exited workers and leaves live replacement generations in service. Externally launched replacements are owned by the process that launched them. During a normal shutdown, the dispatcher has up to 10 seconds to finish admitted work while the broker and manifest workers remain available. Use `/services` and `/describe system.bootstrap` in the TUI to inspect registrations and the bootstrap interface.
+
+Worker logs are named `worker-NAME.log` under the state directory. The broker and bootstrap share `kernel.log`. Manifest `pass_env` names refer to the launchd job's environment, so values exported in your terminal aren't passed to background workers. Use the provider's stored login where available.
+
 ## Start an offline stack
 
 The example manifest starts a broker, model router, offline provider, task mailbox, and agent in a fresh directory. Build the broker first. Omit `--smoke` to keep the stack up until Ctrl-C.

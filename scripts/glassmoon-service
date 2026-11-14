@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+cd -P "$(dirname "$0")/.."
+if [ ! -x .venv/bin/python ]; then
+    echo "GlassMoon needs its Python environment. From $PWD run uv sync --locked." >&2
+    exit 1
+fi
+exec .venv/bin/python -m glassmoon.launchd "$@"
