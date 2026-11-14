@@ -24,18 +24,38 @@ For a visual check, follow the `/evidence OWNER KEY` reference shown by `/task I
 
 A timeout or worker exit does not prove that a tool had no effect. Ambiguous work stays in review until its receipt and effects can be checked. Do not automatically replay it. Reconciliation can recover a completed receipt; if no reliable receipt exists, record independently verified completion with `verified`, requeue when a retry is warranted, or cancel the task.
 
-## Recovery instruction recorded at submission
+## Recover a note after a lost acknowledgment
 
-For a note task, attach a check that names the effect key `playbook-note-v1`, the expected note `Review Moon handoff`, and the local fixture database. Confirm the stored receipt matches both the key and note. That receipt verifies one accepted note effect. If the receipt is missing, keep the task in review while you verify the database identity and check the stored note. Record an explicit resolution after checking the evidence. An approved retry uses the original effect key and note.
+Suppose Tide has write access to the disposable fixture at `/tmp/glassmoon-handoff/notes.sqlite`. Record the absolute database path, expected text, and effect key when assigning the work.
 
-## Conceptual local receipt simulation
+```text
+/queue-check tide In /tmp/glassmoon-handoff/notes.sqlite, check the receipt for key playbook-note-v1 and note Review Moon handoff. | Use the local HandoffFixture to store Review Moon handoff under key playbook-note-v1 in /tmp/glassmoon-handoff/notes.sqlite.
+```
 
-Use `examples/handoff_fixture.py` with disposable local SQLite storage; the following describes behavior, not a runnable API recipe:
+1. Open `/task ID` after the lease expires. Read the saved check and note the revision. `/timeline ID` can confirm that delivery reached a tool call before the interruption.
+2. Run `/reconcile ID`. A saved, completed agent reply can settle the delivery. If the agent only saved a start receipt, or there is no receipt, check the fixture before making a decision.
+3. Open the exact database from the check in read-only mode. Verify that its receipt matches the key and note.
 
-1. Store note `Review Moon handoff` under idempotency key `playbook-note-v1`. The fixture stores the harmless note and its success receipt atomically.
-2. Simulate losing the caller's acknowledgment, then close and reopen the fixture against the same database.
-3. Look up the key: its durable receipt demonstrates the stored effect survived reopening.
-4. Repeat the same key and note: receive the original receipt without another effect.
-5. Repeat the key with different text: receive a conflict; the original note is unchanged.
+   ```sh
+   uv run --locked python - <<'PY'
+   from contextlib import closing
+   import sqlite3
 
-For a queued task, inspect `/task ID` and reconcile a recoverable completed receipt with `/reconcile ID`. A fixture receipt proves only that local note operation, not completion of unrelated task steps. Keep any remaining ambiguity in review.
+   path = 'file:/tmp/glassmoon-handoff/notes.sqlite?mode=ro'
+   with closing(sqlite3.connect(path, uri=True)) as db:
+       rows = db.execute(
+           'SELECT receipt_id, note FROM notes WHERE idempotency_key=?',
+           ('playbook-note-v1',),
+       ).fetchall()
+   assert len(rows) == 1 and rows[0][1] == 'Review Moon handoff', rows
+   print(f'Confirmed fixture receipt {rows[0][0]}')
+   PY
+   ```
+
+4. Reopen `/task ID` for its current revision. If the task is still in review and that note was its only requested effect, use `/resolve ID REVISION verified Confirmed fixture receipt N and matching note`. If the database cannot be opened or the receipt differs, leave the task in review while investigating. An approved retry uses the original effect key and note.
+
+From the repository, the following test simulates losing the acknowledgment after the fixture commits. It checks for one stored effect, closes the mailbox task from review, and confirms there is no second delivery.
+
+```sh
+uv run --locked python -m unittest discover -s tests -p test_mailbox.py -k verified_external_effect
+```
