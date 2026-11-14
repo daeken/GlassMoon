@@ -16,6 +16,16 @@ from .models import result_text
 from .toolbox import call_tool, inspect_tool
 
 
+def task_state(row):
+    if row["status"] == "review":
+        return "review · outcome unknown"
+    return {
+        "operator_verified": "done · operator verified",
+        "agent_reply": "done · agent replied",
+        "recovered_reply": "done · agent reply recovered",
+    }.get(row.get("completion_source"), row["status"])
+
+
 def terminal_text(value):
     return "".join(
         char
@@ -373,14 +383,9 @@ class Terminal:
         if not response["tasks"]:
             self.log("status", "No tasks need review." if status == "review" else "No tasks.")
         for row in response["tasks"]:
-            state = (
-                "review · outcome unknown"
-                if row["status"] == "review"
-                else row["status"]
-            )
             self.log(
                 "status",
-                f"{row['id']}  {state}  {row['sender']} → {row['agent']}  {row['key']}  attempts {row['attempts']}",
+                f"{row['id']}  {task_state(row)}  {row['sender']} → {row['agent']}  {row['key']}  attempts {row['attempts']}",
             )
         if response["before"] is not None:
             self.log("status", "Use /more-tasks to see older matching tasks.")
@@ -402,7 +407,7 @@ class Terminal:
     async def show_task(self, identifier):
         task = await call_tool(self.socket, self.mailbox, "get", {"id": identifier})
         self.log(
-            "status", f"{task['id']}  {task['status']}  revision {task['revision']}"
+            "status", f"{task['id']}  {task_state(task)}  revision {task['revision']}"
         )
         self.log("status", task["task"])
         if task.get("parent"):
@@ -496,7 +501,7 @@ class Terminal:
                 retry_delay = 1
             progress = row.get("progress", [])
             if row["revision"] != revision:
-                self.log("status", f"Task {identifier}  {row['status']}  attempt {row['attempts']}")
+                self.log("status", f"Task {identifier}  {task_state(row)}  attempt {row['attempts']}")
                 revision = row["revision"]
             if progress:
                 event = progress[-1]

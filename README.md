@@ -248,7 +248,7 @@ Use `--discover` on a trusted stack to deliver work to agents as they register. 
 
 A dispatcher claims each task with a renewable lease. After losing a reply, the dispatcher checks the agent receipt before reporting an ambiguous delivery. An expired lease or ambiguous delivery moves the task to `review`. Use `/reconcile ID` in the TUI to recover a reply committed by the recipient when the delivery acknowledgment was lost. A saved partial reply is shown in the task while it stays in review. A receipt that only says execution started also leaves the task in review. After checking the work's effects, use `/resolve ID REVISION ACTION NOTE` in the TUI or the mailbox's `review` operation. Choose `verified` to record independently verified completion, `requeue` to retry, or `cancel` to close the task. The mailbox is shared among trusted broker clients.
 
-Use `/timeline ID` to see when the mailbox recorded claims, tool events, replies, and review decisions across attempts. The view distinguishes an agent reply from operator verification. Tasks created before recording was enabled have a partial timeline.
+Use `/timeline ID` to see when the mailbox recorded claims, tool events, replies, and review decisions across attempts. Task lists and details identify whether a completed task has an agent reply, a recovered reply, or an operator verification. Tasks created before recording was enabled have a partial timeline.
 
 Use `/watch-task ID` to follow a task as it runs. The watch reconnects after a broker or mailbox outage and stops at a saved reply, review, or cancellation. Run the command again to stop watching sooner.
 

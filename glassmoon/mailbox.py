@@ -65,6 +65,17 @@ DISPATCH = {
     ),
 }
 STATES = ("queued", "running", "done", "review", "cancelled")
+COMPLETION_SQL = """
+    CASE WHEN tasks.status='done' THEN (
+        SELECT CASE kind
+            WHEN 'verified' THEN 'operator_verified'
+            WHEN 'reply_recorded' THEN 'agent_reply'
+            WHEN 'receipt_recovered' THEN 'recovered_reply'
+        END FROM task_events
+        WHERE task_id=tasks.id AND kind IN ('verified', 'reply_recorded', 'receipt_recovered')
+        ORDER BY seq DESC LIMIT 1
+    ) END AS completion_source
+"""
 
 
 def label(value, field):
@@ -274,7 +285,7 @@ class Mailbox:
         return self.get(db, now, identifier)
 
     def get(self, db, _now, id):
-        row = db.execute("SELECT * FROM tasks WHERE id=?", (id,)).fetchone()
+        row = db.execute(f"SELECT tasks.*, {COMPLETION_SQL} FROM tasks WHERE id=?", (id,)).fetchone()
         if row is None:
             raise fail("unknown_task", "Task does not exist")
         task = self.public(row)
@@ -351,8 +362,9 @@ class Mailbox:
             number(before, 1, 2**63 - 1, "before") if before is not None else 2**63 - 1
         )
         rows = db.execute(
-            """
-            SELECT seq, id, sender, agent, key, status, revision, attempts, parent, created_at, updated_at
+            f"""
+            SELECT seq, id, sender, agent, key, status, revision, attempts, parent, created_at, updated_at,
+                   {COMPLETION_SQL}
               FROM tasks
              WHERE seq < ? AND (? IS NULL OR agent=?) AND (? IS NULL OR status=?)
                    AND (? IS NULL OR parent=?)

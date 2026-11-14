@@ -450,6 +450,28 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[21]["phase"], "failed")
         self.assertNotIn("result", events[-1])
 
+    def test_task_rows_distinguish_agent_reply_recovery_and_operator_verification(self):
+        expected = {}
+        for key in ("reply", "recovered", "verified"):
+            task = self.rpc("submit", **(TASK | {"key": key}))
+            lease = self.rpc("claim", agent="tide", lease_seconds=1)
+            if key == "reply":
+                done = self.rpc("finish", id=task["id"], token=lease["token"], status="done", result="Reply")
+                expected[key] = "agent_reply"
+            else:
+                self.now += 2
+                review = self.rpc("get", id=task["id"])
+                self.assertIsNone(review["completion_source"])
+                if key == "recovered":
+                    done = self.box.settle_receipt(task["id"], review["revision"], 1, "Recovered reply")
+                    expected[key] = "recovered_reply"
+                else:
+                    done = self.rpc("review", id=task["id"], action="verified", note="Checked effect", expected_revision=review["revision"])
+                    expected[key] = "operator_verified"
+            self.assertEqual(done["completion_source"], expected[key])
+        listing = self.rpc("list_tasks", status="done")["tasks"]
+        self.assertEqual({row["key"]: row["completion_source"] for row in listing}, expected)
+
     def test_get_keeps_escape_heavy_results_within_a_reply(self):
         values = TASK | {"task": "A" + "\0" * 3999, "recovery_check": "A" + "\0" * 1199}
         task = self.rpc("submit", **values)
