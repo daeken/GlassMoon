@@ -32,6 +32,17 @@ TOOLS = {
         WINDOW | {"url": TEXT},
     ),
     "inspect": tool("Read the page title, URL, and visible text.", WINDOW),
+    "snapshot": tool("Read a bounded accessibility snapshot of the page.", WINDOW),
+    "element": tool(
+        "Read, click, or fill one visible element by its exact accessible name, label, or placeholder. "
+        "For by=role, include the role. For action=fill, include text. Ambiguous targets fail.",
+        WINDOW | {
+            "action": TEXT | {"enum": ["read", "click", "fill"]},
+            "by": TEXT | {"enum": ["role", "label", "placeholder"]},
+            "name": TEXT,
+        },
+        {"role": TEXT, "text": TEXT},
+    ),
     "diagnostics": tool(
         "Read recent page errors, console warnings, and failed requests for this window.",
         WINDOW,
@@ -343,6 +354,13 @@ class Browser:
                 return within_reply_limit(
                     {"url": page.url, "title": await page.title(), "text": content}
                 )
+            case "snapshot":
+                tree = await page.locator("body").aria_snapshot()
+                return within_reply_limit({
+                    "url": page.url, "tree": tree[:6000], "truncated": len(tree) > 6000,
+                })
+            case "element":
+                return await self.element(page, args)
             case "evaluate":
                 return within_reply_limit(
                     {
@@ -412,6 +430,39 @@ class Browser:
             case _:
                 raise fail("unknown_tool", "Unknown browser action")
         return {"url": page.url, "action": action}
+
+    async def element(self, page, args):
+        action, by, name = args["action"], args["by"], args["name"]
+        role = args.get("role")
+        if not isinstance(name, str) or not name.strip() or len(name) > 200:
+            raise fail("invalid_target", "Use an exact element name of up to 200 characters")
+        if by == "role" and isinstance(role, str) and role.isascii() and role.isalpha():
+            locator = page.get_by_role(role, name=name, exact=True)
+        elif by == "label" and role is None:
+            locator = page.get_by_label(name, exact=True)
+        elif by == "placeholder" and role is None:
+            locator = page.get_by_placeholder(name, exact=True)
+        else:
+            raise fail("invalid_target", "Choose a role and name, label, or placeholder")
+        count = await locator.count()
+        if count > 1:
+            raise fail("ambiguous_target", "More than one element matches the target")
+        if count == 0 or not await locator.is_visible():
+            raise fail("target_unavailable", "Target is missing or hidden. Take a fresh snapshot.")
+        result = {"action": action}
+        match action:
+            case "read":
+                result["text"] = (await locator.inner_text())[:2000]
+            case "click":
+                await locator.click()
+            case "fill":
+                value = args.get("text")
+                if not isinstance(value, str) or len(value) > 4000:
+                    raise fail("invalid_text", "Use a string of at most 4000 characters")
+                await locator.fill(value)
+            case _:
+                raise fail("invalid_action", "Choose read, click, or fill")
+        return result | {"url": page.url}
 
 
 async def run(args):

@@ -150,6 +150,8 @@ uv run --locked python -m glassmoon.browser --socket "$GLASSMOON_SOCKET" \
 
 Give an agent `--tool-service browser.chromium` or `--tool-service browser.webkit`. Open a window and keep the returned handle for navigation, inspection, JavaScript, screenshots, and input. `wait_for` checks an observable selector and optional text. `diagnostics` returns recent page errors, console warnings, and failed requests for the window. `actions` runs an ordered sequence of clicks, typing, keypresses, and scrolls within one window. Browser contexts start fresh and have independent storage. A worker replacement closes its old contexts.
 
+Use `snapshot` to see the page's accessibility tree. With `element`, target a role and exact accessible name, label, or placeholder for a `read`, `click`, or `fill` action. An ambiguous target returns an error before the interaction. [Playwright locator reference](https://playwright.dev/python/docs/locators)
+
 For fixture-driven work, pass `--allow-origin http://127.0.0.1:8000` to limit intercepted HTTP requests to one exact scheme, host, and port. Repeat the option for additional origins. In this mode redirects with a destination and WebSockets are blocked. Use operating-system isolation if you need process-wide network restrictions.
 
 Screenshots use viewport coordinates and arrive as image tool results. The router selects a model declaring `tool_images` and image input once a screenshot tool is available. The OpenAI example catalog includes this support. The runloop retains the latest screenshot within the IPC frame budget. Browser tools are also callable in Python with `glassmoon.toolbox.call_tool`. The TUI command `/tools` probes the agent's currently configured tool services.

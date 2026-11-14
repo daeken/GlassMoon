@@ -16,7 +16,7 @@ PAGE = """
 input, button { position: absolute; left: 20px; width: 140px; height: 32px; }
 input { top: 20px; } button { top: 70px; }
 </style>
-<input id="note"><button onclick="document.querySelector('#status').textContent = document.querySelector('#note').value">Save</button>
+<input id="note" placeholder="Note" aria-label="Fixture note"><button onclick="document.querySelector('#status').textContent = document.querySelector('#note').value">Save</button>
 <p id="status" style="position:absolute;top:110px"></p>
 """
 
@@ -157,6 +157,22 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         await worker.invoke(
             "wait_for", a | {"selector": "#status", "text": "visual check"}
         )
+        snapshot = await worker.invoke("snapshot", a)
+        self.assertIn('textbox "Fixture note"', snapshot["tree"])
+        self.assertIn('button "Save"', snapshot["tree"])
+        self.assertFalse(snapshot["truncated"])
+        await worker.invoke(
+            "element", a | {"action": "fill", "by": "label", "name": "Fixture note", "text": "semantic check"}
+        )
+        save = a | {"action": "click", "by": "role", "role": "button", "name": "Save"}
+        await worker.invoke("element", save)
+        await worker.invoke("wait_for", a | {"selector": "#status", "text": "semantic check"})
+        await worker.invoke(
+            "evaluate", a | {"script": "() => document.body.insertAdjacentHTML('beforeend', '<button>Save</button>')"}
+        )
+        with self.assertRaises(RequestError) as ambiguous:
+            await worker.invoke("element", save)
+        self.assertEqual(ambiguous.exception.code, "ambiguous_target")
         self.assertEqual(
             (
                 await worker.invoke(
