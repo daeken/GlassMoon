@@ -92,6 +92,8 @@ uv run --locked python -m glassmoon.agent --socket "$GLASSMOON_SOCKET" \
 
 Raw Python runs as your local user in a fresh process with the workspace as its working directory. It can access anything your local user can access. File tools accept workspace-relative paths and check the last-read revision before overwriting. An agent with workspace tools selects models that advertise function calling. The TUI shows tool activity during streamed turns.
 
+Add `--workspace-read-only` for a reviewer that needs directory listings and file contents. This flag controls the built-in workspace tools. The agent's separately configured tool services retain their own capabilities.
+
 Use `edit_file_batch` for up to eight exact replacements within one file revision. The edits run in order, and the file is written only after all replacements match.
 
 ### Register another model provider

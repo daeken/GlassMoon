@@ -80,12 +80,17 @@ else:
 
 
 class Workspace:
-    def __init__(self, root, python=False, socket=None):
+    def __init__(self, root, python=False, socket=None, *, read_only=False):
         self.root = Path(root).expanduser().resolve(strict=True)
         if not self.root.is_dir():
             raise ValueError("The workspace must be a directory")
+        if read_only and python:
+            raise ValueError("Raw Python requires a writable workspace")
         self.socket = socket
-        self.names = [name for name in TOOLS if name != "python_eval" or python]
+        self.names = (
+            ["list_files", "read_file"] if read_only
+            else [name for name in TOOLS if name != "python_eval" or python]
+        )
         self.definitions = [
             {
                 "name": name,

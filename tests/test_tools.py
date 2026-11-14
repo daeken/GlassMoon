@@ -33,6 +33,21 @@ def sse(*items):
 
 
 class ToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_read_only_workspace_lists_and_reads_but_refuses_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory, "note.txt")
+            file.write_text("original")
+            workspace = Workspace(directory, read_only=True)
+            self.assertEqual([item["name"] for item in workspace.definitions], ["list_files", "read_file"])
+            self.assertNotIn("error", await workspace.execute(tool("list_files", path=".")))
+            read = await workspace.execute(tool("read_file", path=file.name))
+            self.assertEqual(read["text"], "original")
+            for name in ("write_file", "edit_file", "edit_file_batch", "python_eval"):
+                self.assertEqual((await workspace.execute(tool(name)))["error"], "unknown_tool")
+            self.assertEqual(file.read_text(), "original")
+            with self.assertRaises(ValueError):
+                Workspace(directory, python=True, read_only=True)
+
     async def test_workspace_batch_edit_rolls_back_failed_match(self):
         with tempfile.TemporaryDirectory() as directory:
             file = Path(directory, "note.txt")

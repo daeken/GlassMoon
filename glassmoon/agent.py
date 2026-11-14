@@ -622,7 +622,10 @@ async def run(args):
             requirements,
             args.instructions,
             transcripts,
-            Workspace(args.workspace, python=args.python_eval, socket=args.socket)
+            Workspace(
+                args.workspace, python=args.python_eval, socket=args.socket,
+                read_only=args.workspace_read_only,
+            )
             if args.workspace
             else None,
             args.tool_service,
@@ -675,6 +678,10 @@ def main():
         "--workspace", help="Directory where the agent can read and edit files"
     )
     parser.add_argument(
+        "--workspace-read-only", action="store_true",
+        help="Expose only the workspace directory listing and file reading tools",
+    )
+    parser.add_argument(
         "--python-eval",
         action="store_true",
         help="Enable raw Python execution for a trusted agent",
@@ -691,6 +698,10 @@ def main():
             parser.error("--staged and --replace cannot be used together")
         if args.python_eval and not args.workspace:
             parser.error("--python-eval requires --workspace")
+        if args.workspace_read_only and not args.workspace:
+            parser.error("--workspace-read-only requires --workspace")
+        if args.workspace_read_only and args.python_eval:
+            parser.error("--workspace-read-only cannot be combined with --python-eval")
         asyncio.run(run(args))
     except KeyboardInterrupt:
         return 130
