@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import unittest
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
@@ -38,6 +38,21 @@ class UpgradeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProtocolError) as invalid:
                 await Wire(reader, None).receive()
             self.assertEqual(str(invalid.exception), "Incoming frame is not valid JSON")
+
+    async def test_exact_call_rejects_error_from_a_different_generation(self):
+        wire = AsyncMock()
+        wire.features = ("generation_calls",)
+        wire.receive.return_value = {
+            "id": "call", "type": "response", "status": "error", "generation": 99,
+            "error": {"code": "fixture", "message": "Wrong worker"},
+        }
+
+        @asynccontextmanager
+        async def fake_connect(_socket):
+            yield wire
+
+        with patch("glassmoon.ipc.connect", fake_connect), self.assertRaises(ProtocolError):
+            await call("unused", "fixture", "health", {}, generation=42)
 
     async def test_terminal_health_pins_generation_and_flags_identity_mismatch(self):
         async with AsyncExitStack() as stack, asyncio.timeout(10):

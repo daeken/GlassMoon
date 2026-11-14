@@ -122,6 +122,11 @@ async def call(
                 await on_chunk(message["data"])
             elif message["type"] == "response":
                 if message["status"] == "error":
+                    if (
+                        generation is not None and message.get("generation") is not None
+                        and message["generation"] != generation
+                    ):
+                        raise ProtocolError("Call error came from an unexpected generation")
                     raise RequestError(
                         message["error"], generation=message.get("generation")
                     )
