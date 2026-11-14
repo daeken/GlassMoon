@@ -420,7 +420,7 @@ class Mailbox:
         limit = number(limit, 1, 10, "limit")
         rows = db.execute(f"""
             SELECT id, sender, agent, key, status, revision, attempts, lease_until, available_at,
-                   CASE WHEN status='done' THEN result END AS finished_result,
+                   CASE WHEN status IN ('done','review') THEN result END AS recorded_result,
                    EXISTS(SELECT 1 FROM task_evidence WHERE task_id=tasks.id) AS has_evidence,
                    recovery_check IS NOT NULL AS has_recovery_check,
                    COALESCE((SELECT observed_at FROM task_events WHERE task_id=tasks.id
@@ -441,7 +441,7 @@ class Mailbox:
         tasks = []
         for row in rows[:limit]:
             task = dict(row)
-            result = task.pop("finished_result")
+            result = task.pop("recorded_result")
             if result:
                 task["result_excerpt"] = result[:240]
                 task["result_excerpt_truncated"] = len(result) > 240

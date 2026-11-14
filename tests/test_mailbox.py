@@ -515,6 +515,15 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(row["result_excerpt_truncated"])
         self.assertEqual(self.rpc("get", id=row["id"])["result"], result)
 
+    def test_handoff_surfaces_saved_partial_reply_in_review(self):
+        task = self.rpc("submit", **TASK)
+        lease = self.rpc("claim", agent="tide", lease_seconds=30)
+        reply = "Check whether the click produced a saved note."
+        self.rpc("finish", id=task["id"], token=lease["token"], status="review", result=reply)
+        row = self.rpc("handoff")["tasks"][0]
+        self.assertEqual((row["status"], row["result_excerpt"]), ("review", reply))
+        self.assertFalse(row["result_excerpt_truncated"])
+
     def test_get_keeps_escape_heavy_results_within_a_reply(self):
         values = TASK | {"task": "A" + "\0" * 3999, "recovery_check": "A" + "\0" * 1199}
         task = self.rpc("submit", **values)
