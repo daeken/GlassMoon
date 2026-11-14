@@ -11,6 +11,7 @@ from .models import OBJECT, TEXT
 from .service import fail, method, serve, service_args
 
 METHODS = {
+    "health": method("Check that the worker can answer and report its tool count"),
     "tools": method("Discover shared functions"),
     "invoke": method("Run a shared function", {"name": TEXT, "arguments": OBJECT}),
 }
@@ -43,6 +44,8 @@ class ToolService:
         self.invoke = invoke
 
     async def handle(self, name, params, _emit, _stream):
+        if name == "health":
+            return {"status": "ok", "tools": len(self.functions)}
         if name == "tools":
             return {
                 "tools": [

@@ -217,6 +217,12 @@ class Transcripts:
             [json.loads(row[2]) for row in rows if row[2] is not None],
         )
 
+    def revision(self, identifier):
+        row = self.db.execute("SELECT revision FROM conversations WHERE id=?", (identifier,)).fetchone()
+        if row is None:
+            raise fail("unknown_conversation", "Conversation does not exist")
+        return row[0]
+
     def context(self, identifier):
         snapshot = self.db.execute(
             """SELECT c.revision, COALESCE(k.through_revision, 0), COALESCE(k.summary, ''), m.value

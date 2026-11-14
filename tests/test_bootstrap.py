@@ -84,6 +84,10 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(seen[-1]["model"], "chosen")
             self.assertEqual(seen[-1]["min_context_tokens"], 1234)
             self.assertIn("first question", json.dumps(seen[-1]["messages"]))
+            self.assertEqual(
+                await replacement.handle("health", {}, ignore, False),
+                {"status": "ok", "agent": "moon", "revision": 10},
+            )
 
     async def test_tui_pages_older_history_without_duplicate_messages(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -239,6 +243,7 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 ' "handler": lambda a, b: a * b}}\n'
             )
             published = load(plugin)
+            self.assertEqual(await published.handle("health", {}, ignore, False), {"status": "ok", "tools": 1})
             response = await published.handle(
                 "invoke",
                 {"name": "multiply", "arguments": {"a": 6, "b": 7}},

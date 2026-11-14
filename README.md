@@ -229,6 +229,8 @@ The release command sends the probe to the specified generation and compares the
 
 Add `--check-only` to run the probe while leaving the candidate staged. A later release probes it again before activation.
 
+Shared tool workers expose `health` with `status` and their tool count. Agents report their identity and saved conversation revision. These probes check basic worker readiness. Use a service-specific probe when release depends on a downstream dependency.
+
 ### Supervise a local worker
 
 Moon wrote the `moon.text` example service, which fingerprints UTF-8 text and exposes a deterministic health probe. The supervisor starts a worker, validates probe fields, restarts it after repeated failures or process exit, and can send an incident to a named maintainer agent.

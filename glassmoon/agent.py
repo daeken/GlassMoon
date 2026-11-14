@@ -24,6 +24,7 @@ from .toolbox import call_tool, tool_catalog, validate_name
 from .workspace_tools import Workspace
 
 METHODS = {
+    "health": method("Check that the worker can read its conversation revision"),
     "info": method("Show agent identity and model settings"),
     "tool_status": method("Probe local and shared tool availability"),
     "tool_policy": method("Read the revisioned shared tool settings"),
@@ -389,6 +390,9 @@ class Agent:
         )
 
     async def handle(self, name, params, emit, stream):
+        if name == "health":
+            revision = self.transcripts.revision(self.conversation)
+            return {"status": "ok", "agent": self.identity, "revision": revision}
         if name == "model_preference":
             return self.model_preference()
         if name == "set_model_preference":
