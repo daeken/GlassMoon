@@ -225,6 +225,8 @@ The desktop service captures the main display, including other visible apps. The
 
 For a read-only worker scoped to one app, start it with `--window-capture --target-pid PID`. Call `windows` for that app's visible window IDs, then `window_screenshot` for the selected window. [ScreenCaptureKit window filter](https://developer.apple.com/documentation/screencapturekit/sccontentfilter/init%28desktopindependentwindow%3A%29)
 
+With `--target-pid`, `accessibility_snapshot` returns a bounded tree of roles and labels from that app's windows. It requires macOS Accessibility permission. The tool reads labels from Apple's Accessibility API and omits control values. [Apple Accessibility attributes](https://developer.apple.com/documentation/applicationservices/1462085-axuielementcopyattributevalue)
+
 Add `--evidence tools.evidence` to that worker to share a selected window using `share_window`. The evidence records the capture dimensions, process ID, and window ID with the screenshot digest.
 
 ### Keep shared working notes

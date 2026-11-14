@@ -21,6 +21,9 @@ TOOLS = {
         "Capture a window from the configured app. Use a window ID from windows.",
         {"window_id": INTEGER},
     ),
+    "accessibility_snapshot": tool(
+        "Read a bounded tree of accessible roles and labels in the configured macOS app's windows."
+    ),
     "click": tool(
         "Click at coordinates from the latest main display screenshot.",
         {"x": INTEGER, "y": INTEGER},
@@ -37,7 +40,7 @@ TOOLS = {
 }
 TOOLS["screenshot"]["returns_image"] = True
 TOOLS["window_screenshot"]["returns_image"] = True
-CAPTURE_TOOLS = ("status", "screenshot", "windows", "window_screenshot")
+CAPTURE_TOOLS = ("status", "screenshot", "windows", "window_screenshot", "accessibility_snapshot")
 SHARE_WINDOW = tool(
     "Explicitly share one selected app-window screenshot and an observation summary.",
     {"window_id": INTEGER, "owner": TEXT, "key": TEXT, "summary": TEXT},
@@ -53,6 +56,8 @@ class Desktop:
         self.lock = asyncio.Lock()
 
     async def invoke(self, action, args):
+        if action == "accessibility_snapshot" and self.target_pid is None:
+            raise fail("invalid_target", "Start the desktop service with --target-pid to inspect accessibility")
         if action in ("windows", "window_screenshot") and not self.window_capture:
             raise fail("window_capture_disabled", "Start the desktop service with --window-capture")
         if action == "screenshot" and self.window_capture:
@@ -130,6 +135,7 @@ def main():
             if (args.allow_input or name in CAPTURE_TOOLS)
             and (name not in ("windows", "window_screenshot") or args.window_capture)
             and (name != "screenshot" or not args.window_capture)
+            and (name != "accessibility_snapshot" or args.target_pid is not None)
         }
         async def invoke(name, arguments):
             if name != "share_window":

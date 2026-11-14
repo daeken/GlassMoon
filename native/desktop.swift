@@ -46,6 +46,64 @@ func typeText(_ text: String, pid: Int?) throws {
     }
 }
 
+func axAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+        return nil
+    }
+    return value
+}
+
+func accessibilitySnapshot(_ pid: Int) throws -> [String: Any] {
+    guard AXIsProcessTrusted() else {
+        throw DesktopError("accessibility_required", "Allow Accessibility for the GlassMoon desktop launcher in macOS Settings")
+    }
+    _ = AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.15)
+    let app = AXUIElementCreateApplication(pid_t(pid))
+    guard axAttribute(app, kAXRoleAttribute) != nil else {
+        throw DesktopError("target_unavailable", "Could not read the configured app's accessibility tree")
+    }
+    let limit = 55
+    let deadline = ProcessInfo.processInfo.systemUptime + 2
+    var pending = [(app, 0)]
+    var rows = [[String: Any]]()
+    var truncated = false
+    while let (element, depth) = pending.popLast() {
+        if rows.count == limit || ProcessInfo.processInfo.systemUptime >= deadline {
+            truncated = true
+            break
+        }
+        var owner: pid_t = 0
+        guard AXUIElementGetPid(element, &owner) == .success, owner == pid_t(pid) else {
+            continue
+        }
+        let role = axAttribute(element, kAXRoleAttribute) as? String ?? "AXUnknown"
+        var row: [String: Any] = ["depth": depth, "role": String(role.prefix(80))]
+        if let label = (axAttribute(element, kAXTitleAttribute) as? String)
+            .flatMap({ $0.isEmpty ? nil : $0 }) ?? axAttribute(element, kAXDescriptionAttribute) as? String,
+           !label.isEmpty {
+            row["label"] = String(label.prefix(80))
+        }
+        rows.append(row)
+        let attribute = (depth == 0 ? kAXWindowsAttribute : kAXChildrenAttribute) as CFString
+        var count = 0
+        if AXUIElementGetAttributeValueCount(element, attribute, &count) == .success, count > 0 {
+            let capacity = min(20, limit - rows.count - pending.count)
+            if depth >= 7 || capacity <= 0 {
+                truncated = true
+                continue
+            }
+            var elements: CFArray?
+            if AXUIElementCopyAttributeValues(element, attribute, 0, min(count, capacity), &elements) == .success,
+               let children = elements as? [AXUIElement] {
+                pending.append(contentsOf: children.reversed().map { ($0, depth + 1) })
+                truncated = truncated || children.count < count
+            }
+        }
+    }
+    return ["target_pid": pid, "nodes": rows, "truncated": truncated]
+}
+
 func requireTarget(_ pid: Int, at point: CGPoint) throws {
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
         as? [[String: Any]] ?? []
@@ -114,6 +172,12 @@ struct Desktop {
                 "accessibility": CGPreflightPostEventAccess(),
                 "width": width, "height": height, "display": Int(displayID)
             ]
+        case "accessibility_snapshot":
+            let pid = try integer(args, "target_pid")
+            guard pid > 0, pid <= Int(Int32.max) else {
+                throw DesktopError("invalid_target", "Configure a macOS process ID for an accessibility snapshot")
+            }
+            return try accessibilitySnapshot(pid)
         case "screenshot":
             guard CGPreflightScreenCaptureAccess() else {
                 throw DesktopError("screen_recording_required", "Allow Screen Recording for the GlassMoon desktop launcher in macOS Settings")
