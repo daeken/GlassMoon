@@ -223,7 +223,7 @@ The browser's `share` tool publishes a screenshot with an owner, key, and reprod
 
 Use `share_checked` to verify the exact visible text of one CSS-matched element before and after capturing a screenshot. A successful publication includes the expected and observed text, selector, page path without query or fragment, and the usual evidence metadata. Link the resulting key to the task so a reviewer can inspect the saved check and screenshot after the window closes.
 
-Both `share` and `share_checked` accept an optional `region` with `x`, `y`, `width`, and `height`. The evidence records the crop coordinates alongside the image. The text check still applies to its selected element, so choose a crop that shows the context you want the reviewer to see.
+Both `share` and `share_checked` accept an optional `region` with `x`, `y`, `width`, and `height`. The evidence records the crop coordinates alongside the image. For `share_checked`, the region must contain the checked element's bounding box before and after capture.
 
 Use `/evidence OWNER` to find published keys and `/evidence OWNER KEY` to inspect a reproduction summary and its metadata. `/save-image OWNER KEY PATH` checks the digest and creates a new local file with owner-only permissions. Choose an unused destination.
 

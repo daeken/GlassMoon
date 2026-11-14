@@ -343,6 +343,12 @@ class Browser:
         if self.publish is None:
             raise fail("sharing_unavailable", "No evidence service is configured")
         page = window.page
+        region = args.get("region")
+        if region is not None and (
+            not isinstance(region, dict) or region.keys() != REGION.keys()
+            or any(type(value) is not int for value in region.values())
+        ):
+            raise fail("invalid_region", "Supply integer x, y, width, and height for the shared region")
         if checked:
             selector, expected = args["selector"], args["expected"]
             if not isinstance(selector, str) or not 1 <= len(selector.encode()) <= 300:
@@ -352,9 +358,8 @@ class Browser:
             locator = page.locator("css=" + selector)
             url = page.url
             await self.check_visible_text(locator, expected)
-        region = args.get("region")
-        if region is not None and (not isinstance(region, dict) or region.keys() != REGION.keys()):
-            raise fail("invalid_region", "Supply x, y, width, and height for the shared region")
+            if region is not None:
+                await self.check_region_contains(locator, region)
         shot = await self.page_action("screenshot" if region is None else "screenshot_region", page, region or {})
         kinds = {}
         for event in window.diagnostics:
@@ -370,6 +375,8 @@ class Browser:
             metadata["region"] = {field: shot[field] for field in REGION}
         if checked:
             observed = await self.check_visible_text(locator, expected)
+            if region is not None:
+                await self.check_region_contains(locator, region)
             if url != page.url or url != shot["url"]:
                 raise fail("page_changed", "The browser navigated during the capture")
             metadata["visible_text_check"] = {
@@ -380,6 +387,15 @@ class Browser:
             "owner": args["owner"], "key": args["key"], "summary": args["summary"],
             "image": shot["image"], "metadata": metadata,
         })
+
+    @staticmethod
+    async def check_region_contains(locator, region):
+        bounds = await locator.bounding_box()
+        if bounds is None or any(
+            bounds[axis] < region[axis] or bounds[axis] + bounds[size] > region[axis] + region[size]
+            for axis, size in (("x", "width"), ("y", "height"))
+        ):
+            raise fail("target_outside_region", "The screenshot region must contain the checked element")
 
     @staticmethod
     async def check_visible_text(locator, expected):
