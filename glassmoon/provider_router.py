@@ -78,7 +78,7 @@ class Router:
             for entry in entries
         ], None
 
-    async def models(self):
+    async def models(self, *, provider=None, generation=None):
         async with connect(self.socket) as wire:
             services = (await wire.request("list", "list"))["result"]["services"]
         results = await asyncio.gather(
@@ -86,6 +86,8 @@ class Router:
                 self.catalog(item)
                 for item in services
                 if item["state"] == "active" and item.get("kind") == "model_provider"
+                and (provider is None or item["name"] == provider)
+                and (generation is None or item["generation"] == generation)
             )
         )
         models = [model for entries, _ in results for model in entries]
@@ -137,7 +139,7 @@ class Router:
                 "invalid_context", "min_context_tokens must be a positive integer"
             )
 
-        models, _ = await self.models()
+        models, _ = await self.models(provider=params.get("provider"), generation=generation)
         if generation is not None and not any(
             item["provider"] == params["provider"] and item["provider_generation"] == generation
             for item in models

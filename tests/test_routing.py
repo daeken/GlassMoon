@@ -3,7 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +16,25 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class RoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pinned_provider_catalog_skips_unrelated_workers(self):
+        router = Router("unused")
+        rows = [
+            {"name": "selected", "generation": 11, "state": "active", "kind": "model_provider"},
+            {"name": "other", "generation": 12, "state": "active", "kind": "model_provider"},
+        ]
+        wire = AsyncMock()
+        wire.request.return_value = {"result": {"services": rows}}
+
+        @asynccontextmanager
+        async def connect(_):
+            yield wire
+
+        catalog = AsyncMock(return_value=([], None))
+        with patch("glassmoon.provider_router.connect", connect), patch.object(router, "catalog", catalog):
+            await router.models(provider="selected", generation=11)
+            await router.models(provider="selected", generation=12)
+        catalog.assert_awaited_once_with(rows[0])
+
     async def test_catalog_rejects_ambiguous_model_ids_within_one_provider(self):
         router = Router("unused")
         service = {"name": "fixture", "generation": 11, "interface_version": 1}
