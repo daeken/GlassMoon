@@ -171,6 +171,9 @@ class Transcripts:
                 conversation TEXT PRIMARY KEY REFERENCES conversations(id),
                 revision INTEGER NOT NULL, overrides TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS agent_tool_overrides (
+                conversation TEXT PRIMARY KEY REFERENCES conversations(id), overrides TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS model_preferences (
                 conversation TEXT PRIMARY KEY REFERENCES conversations(id),
                 revision INTEGER NOT NULL, mode TEXT NOT NULL, provider TEXT, model TEXT
@@ -320,10 +323,12 @@ class Transcripts:
 
     def tool_policy(self, identifier):
         row = self.db.execute(
-            "SELECT revision, overrides FROM tool_policies WHERE conversation=?",
+            """SELECT t.revision, t.overrides, COALESCE(a.overrides, '{}')
+               FROM tool_policies t LEFT JOIN agent_tool_overrides a ON a.conversation=t.conversation
+               WHERE t.conversation=?""",
             (identifier,),
         ).fetchone()
-        return (row[0], json.loads(row[1])) if row else (0, {})
+        return (row[0], json.loads(row[1]), json.loads(row[2])) if row else (0, {}, {})
 
     def model_preference(self, identifier):
         row = self.db.execute(
@@ -349,14 +354,19 @@ class Transcripts:
             )
             return saved
 
-    def set_tool_policy(self, identifier, expected, service, mode):
+    def set_tool_policy(self, identifier, expected, service, mode, *, agent_requested=False):
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            revision, overrides = self.tool_policy(identifier)
+            revision, operator, agent = self.tool_policy(identifier)
             if revision != expected:
                 raise fail("policy_changed", "Read the current tool policy before updating it")
-            if overrides.get(service, "default") == mode:
-                return revision, overrides
+            if agent_requested and service in operator:
+                raise fail("tool_policy_denied", "An explicit operator setting controls this service")
+            overrides = agent if agent_requested else operator
+            if overrides.get(service, "default") == mode and (agent_requested or service not in agent):
+                return revision, operator, agent
+            if not agent_requested:
+                agent.pop(service, None)
             if mode == "default":
                 overrides.pop(service, None)
             else:
@@ -368,9 +378,14 @@ class Transcripts:
                 """INSERT INTO tool_policies VALUES (?, ?, ?)
                    ON CONFLICT(conversation) DO UPDATE SET
                        revision=excluded.revision, overrides=excluded.overrides""",
-                (identifier, revision, json.dumps(overrides)),
+                (identifier, revision, json.dumps(operator)),
             )
-            return revision, overrides
+            self.db.execute(
+                """INSERT INTO agent_tool_overrides VALUES (?, ?)
+                   ON CONFLICT(conversation) DO UPDATE SET overrides=excluded.overrides""",
+                (identifier, json.dumps(agent)),
+            )
+            return revision, operator, agent
 
     def append(self, identifier, revision, *messages, receipt=None):
         with self.db:

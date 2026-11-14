@@ -145,9 +145,10 @@ class Agent:
         return {"revision": revision, "mode": mode, "requirements": requirements}
 
     def tool_policy(self, state=None):
-        revision, overrides = (
+        revision, operator, agent = (
             self.transcripts.tool_policy(self.conversation) if state is None else state
         )
+        overrides = {name: mode for name, mode in agent.items() if name in self.self_tools} | operator
         enabled = [
             service
             for service in self.tool_services
@@ -160,7 +161,7 @@ class Agent:
         )
         return {"revision": revision, "overrides": overrides, "enabled": enabled}
 
-    def set_tool_policy(self, params):
+    def set_tool_policy(self, params, *, agent_requested=False):
         service, mode, expected = (
             params["service"], params["mode"], params["expected_revision"]
         )
@@ -170,7 +171,9 @@ class Agent:
             raise fail("invalid_tool_service", "Choose a service name that fits tool namespaces")
         if type(expected) is not int or not 0 <= expected < 2**63 - 1:
             raise fail("invalid_revision", "Expected a valid tool policy revision")
-        state = self.transcripts.set_tool_policy(self.conversation, expected, service, mode)
+        state = self.transcripts.set_tool_policy(
+            self.conversation, expected, service, mode, agent_requested=agent_requested
+        )
         return self.tool_policy(state)
 
     async def discover_tools(self, emit, stream, policy=None):
@@ -282,7 +285,7 @@ class Agent:
                 raise fail("invalid_arguments", "Supply service, mode, and expected revision together")
             if params["service"] not in self.self_tools:
                 raise fail("tool_policy_denied", "This service is outside the operator-approved list")
-            return {"value": self.set_tool_policy(params)}
+            return {"value": self.set_tool_policy(params, agent_requested=True)}
         except RequestError as error:
             return {"error": error.code, "message": str(error)}
         except (TypeError, ValueError):

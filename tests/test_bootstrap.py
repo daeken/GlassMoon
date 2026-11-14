@@ -73,7 +73,15 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(routes, {})
                 definitions, routes, _, _ = await agent.discover_tools(ignore, False)
                 self.assertEqual(routes["mcp_notes__read"], ("mcp.notes", "read", 15))
-                await configure(service="mcp.notes", mode="default", expected_revision=1)
+                replacement = Agent("", "moon", "models", {}, "", store)
+                self.assertEqual(replacement.tool_policy()["enabled"], [])
+                await agent.handle(
+                    "set_tool_policy",
+                    {"service": "mcp.notes", "mode": "disable", "expected_revision": 1},
+                    ignore, False,
+                )
+                blocked = await configure(service="mcp.notes", mode="enable", expected_revision=2)
+                self.assertEqual(blocked["error"], "tool_policy_denied")
                 self.assertEqual((await configure(**read))["value"]["enabled"], [])
 
     async def test_model_preference_applies_after_current_turn_and_persists(self):
