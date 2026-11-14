@@ -5,6 +5,7 @@ import re
 from .service import fail
 
 TOOL_FIELDS = {"tools": {"type": "array"}, "tool_history": {"type": "array"}}
+MAX_FUNCTIONS = 32
 
 
 DATA_IMAGE = re.compile(r"data:image/(?:jpeg|png);base64,[a-zA-Z0-9+/]+={0,2}")
@@ -33,8 +34,8 @@ def valid_output(value):
 
 def definitions(params):
     tools = params.get("tools", [])
-    if not isinstance(tools, list) or len(tools) > 32:
-        raise fail("invalid_tools", "Supply up to 32 function definitions")
+    if not isinstance(tools, list) or len(tools) > MAX_FUNCTIONS:
+        raise fail("invalid_tools", f"Supply up to {MAX_FUNCTIONS} function definitions")
     seen = set()
     for tool in tools:
         name = tool["name"]

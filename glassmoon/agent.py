@@ -226,6 +226,17 @@ class Agent:
                     *definitions,
                     *(tool | {"name": name} for name, tool in additions.items()),
                 ]
+                if len(updated) > functions.MAX_FUNCTIONS:
+                    status[service] = {
+                        "state": "over_limit", "count": len(additions), "generation": generation,
+                        "available_slots": functions.MAX_FUNCTIONS - len(definitions),
+                    }
+                    if stream:
+                        await emit({
+                            "type": "status",
+                            "message": f"Tool service {service} exceeds the {functions.MAX_FUNCTIONS}-tool limit for this turn.",
+                        })
+                    continue
                 definitions = functions.definitions({"tools": updated})
                 routes.update(
                     (name, (service, tool["name"], generation))

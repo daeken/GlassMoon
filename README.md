@@ -144,6 +144,8 @@ Use `/describe-tool SERVICE TOOL` to inspect one shared tool's inputs and the ge
 
 In an agent's TUI window, use `/tool enable SERVICE` or `/tool disable SERVICE` to change its shared tools for new turns. `/tool default SERVICE` restores the startup setting for that name. `/tools` reports the saved settings revision, availability, and the generation it probed. An enabled service can come online later. The agent stores these overrides in its own database, and changes can apply while its current turn finishes. Trusted broker clients can make the same revision-checked changes with `tool_policy` and `set_tool_policy`.
 
+Each turn can expose up to 32 tools. If a service's catalog would exceed the remaining slots, `/tools` shows its size and the number of slots left.
+
 Pass `--configurable-tool-service SERVICE` to let the agent manage that service with `configure_shared_tool`. Repeat the option for additional services. The tool shows the approved names and current revision, and applies changes on the next turn. Explicit operator settings take precedence. Removing a name from the approved list ends any agent override for that service while the name is absent.
 
 Launch or replace an agent with `--tool-service tools.moon --tool-service mcp.math`. It discovers the current tools before each turn and sees them as `tools_moon__text_budget` and `mcp_math__multiply`. The same tools are callable from Python, including an agent's `python_eval`.

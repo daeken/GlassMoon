@@ -290,7 +290,11 @@ class Terminal:
             self.log(window, f"Tool settings revision {result['policy_revision']}")
         for service, status in result["services"].items():
             generation = f"  #{status['generation']}" if "generation" in status else ""
-            self.log(window, f"{service}  {status['state']}  {status['count']} tools{generation}")
+            if status["state"] == "over_limit":
+                detail = f"skipped, {status['count']} tools with {status['available_slots']} slots left"
+            else:
+                detail = f"{status['state']}  {status['count']} tools"
+            self.log(window, f"{service}  {detail}{generation}")
         for tool in result["tools"]:
             self.log(
                 window, f"{tool['name']}{'  [image]' if tool['returns_image'] else ''}"

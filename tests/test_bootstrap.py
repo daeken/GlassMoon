@@ -437,6 +437,27 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 42,
             )
 
+    async def test_agent_reports_catalog_capacity_separately_from_outages(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Transcripts(Path(folder, "agent.db"))
+            self.addCleanup(store.close)
+            agent = Agent("", "moon", "models", {}, "", store, tool_services=["first", "second", "third"])
+
+            async def catalog(_socket, service):
+                count, generation = {"first": (30, 10), "second": (3, 11), "third": (2, 12)}[service]
+                return generation, [
+                    {"name": f"tool_{i}", "description": "Tool", "parameters": {"type": "object"}}
+                    for i in range(count)
+                ]
+
+            with patch("glassmoon.agent.tool_catalog", side_effect=catalog):
+                status = await agent.handle("tool_status", {}, ignore, False)
+            self.assertEqual(len(status["tools"]), 32)
+            self.assertEqual(status["services"]["second"], {
+                "state": "over_limit", "count": 3, "generation": 11, "available_slots": 2,
+            })
+            self.assertEqual(status["services"]["third"]["state"], "available")
+
     async def test_tool_limit_commits_review_receipt_without_running_another_call(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))
