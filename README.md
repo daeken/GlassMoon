@@ -225,6 +225,8 @@ Use `/review` for tasks that need a decision. `/review PARENT` shows only the ch
 
 If a turn exhausts its tool budget after starting work, the agent saves a partial report in its transcript. The mailbox keeps that task in review so the operator can check the effects before retrying.
 
+When delivery is rejected before the agent starts, the mailbox schedules a short retry delay. Other ready tasks can be claimed during that delay.
+
 ### Probe a candidate before switching traffic
 
 Workers that accept `--staged` register a candidate generation while the current generation keeps serving. Run the release command with the candidate ID printed by the worker.

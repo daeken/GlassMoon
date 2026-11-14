@@ -96,7 +96,7 @@ class Mailbox:
                     key TEXT NOT NULL, task TEXT NOT NULL, status TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1, attempts INTEGER NOT NULL DEFAULT 0,
                     token TEXT, lease_until REAL, result TEXT, review_note TEXT,
-                    recovery_check TEXT, parent TEXT REFERENCES tasks(id),
+                    recovery_check TEXT, parent TEXT REFERENCES tasks(id), available_at REAL NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL, updated_at REAL NOT NULL,
                     UNIQUE(sender, key)
                 );
@@ -126,6 +126,8 @@ class Mailbox:
                 db.execute("ALTER TABLE tasks ADD COLUMN recovery_check TEXT")
             if "parent" not in fields:
                 db.execute("ALTER TABLE tasks ADD COLUMN parent TEXT REFERENCES tasks(id)")
+            if "available_at" not in fields:
+                db.execute("ALTER TABLE tasks ADD COLUMN available_at REAL NOT NULL DEFAULT 0")
             db.execute("CREATE INDEX IF NOT EXISTS task_children ON tasks(parent, seq)")
 
     @contextmanager
@@ -320,9 +322,10 @@ class Mailbox:
         duration = number(lease_seconds, 1, 600, "lease_seconds")
         row = db.execute(
             """
-            SELECT id, attempts FROM tasks WHERE agent=? AND status='queued' ORDER BY seq LIMIT 1
+            SELECT id, attempts FROM tasks
+            WHERE agent=? AND status='queued' AND available_at<=? ORDER BY seq LIMIT 1
         """,
-            (agent,),
+            (agent, now),
         ).fetchone()
         if row is None:
             return {"task": None}
@@ -368,11 +371,12 @@ class Mailbox:
         task = db.execute(
             """
             UPDATE tasks SET status=?, token=NULL, lease_until=NULL, result=?,
-                             revision=revision+1, updated_at=?
+                             revision=revision+1, updated_at=?,
+                             available_at=CASE WHEN ?='queued' THEN ? + (1 << MIN(attempts, 5)) ELSE 0 END
             WHERE id=? AND token=? AND status='running'
             RETURNING attempts
         """,
-            (status, result, now, id, token),
+            (status, result, now, status, now, id, token),
         ).fetchone()
         if task is None:
             raise fail("stale_lease", "Task is no longer owned by that lease")
@@ -394,7 +398,7 @@ class Mailbox:
         ]
         task = db.execute(
             """
-            UPDATE tasks SET status=?, review_note=?, result=COALESCE(?, result),
+            UPDATE tasks SET status=?, review_note=?, result=COALESCE(?, result), available_at=0,
                              revision=revision+1, updated_at=?
             WHERE id=? AND revision=?
               AND (status='review' OR (status='queued' AND attempts=0 AND ?='cancel'))

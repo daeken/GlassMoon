@@ -332,6 +332,9 @@ class Terminal:
             self.log("status", f"Parent task {task['parent']}")
         if task.get("recovery_check"):
             self.log("status", f"Recovery check from submitter — {task['recovery_check']}")
+        if task["status"] == "queued" and task.get("available_at", 0) > datetime.now().timestamp():
+            retry_at = datetime.fromtimestamp(task["available_at"]).strftime("%H:%M:%S")
+            self.log("status", f"Delivery deferred until {retry_at} local time.")
         for line in dict.fromkeys((task["result"], task["review_note"])):
             if line:
                 self.log("status", line)

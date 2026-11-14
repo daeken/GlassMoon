@@ -468,3 +468,16 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             self.rpc("review", **(options | {"id": task["id"], "expected_revision": running["revision"]}))
         self.assertEqual(blocked.exception.code, "revision_conflict")
         self.assertEqual(self.rpc("get", id=task["id"])["status"], "running")
+
+    def test_deferred_delivery_yields_to_other_ready_work(self):
+        task = self.rpc("submit", **TASK)
+        unrelated = self.rpc("submit", **(TASK | {"key": "other-ready"}))
+        first = self.rpc("claim", agent="tide", lease_seconds=5)
+        deferred = self.rpc("finish", id=task["id"], token=first["token"], status="queued", result="Agent busy")
+        self.assertGreater(deferred["available_at"], self.now)
+        second = self.rpc("claim", agent="tide", lease_seconds=5)
+        self.assertEqual(second["task"]["id"], unrelated["id"])
+        self.assertIsNone(self.rpc("claim", agent="tide", lease_seconds=5)["task"])
+        self.now = deferred["available_at"]
+        again = self.rpc("claim", agent="tide", lease_seconds=5)
+        self.assertEqual((again["task"]["id"], again["task"]["attempts"]), (task["id"], 2))
