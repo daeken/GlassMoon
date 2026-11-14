@@ -1,5 +1,7 @@
 """Summarize complete turns and keep the source transcript available."""
 
+from urllib.parse import urlsplit
+
 from .models import encoded_size, parts, result_text
 from .service import fail
 
@@ -23,14 +25,26 @@ def context_summary(summary):
     }
 
 
+def attachment_summary(part):
+    location = part.get("url")
+    if isinstance(location, str):
+        try:
+            url = urlsplit(location)
+            if url.scheme in ("http", "https") and url.hostname:
+                return f"[{part['type']} attachment from {url.hostname[:255]}]"
+        except ValueError:
+            pass
+    return f"[{part['type']} attachment]"
+
+
 def compactable_turn(turn):
-    # Preserve multimodal references in the summary even if the summary model is text-only.
+    # Preserve attachment context for text-only summarizers.
     messages = []
     for item in turn:
         text = "\n".join(
             part["text"]
             if part["type"] == "text"
-            else f"[{part['type']}: {str(part.get('url', 'attachment'))[:1500]}]"
+            else attachment_summary(part)
             for part in parts(item["content"])
         )
         # Cap long historical messages so a single turn cannot block all compaction.

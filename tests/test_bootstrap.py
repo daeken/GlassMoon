@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from mcp import StdioServerParameters
 
 from glassmoon.agent import Agent
+from glassmoon.compaction import compactable_turn
 from glassmoon.ipc import RequestError
 from glassmoon.mcp_bridge import Bridge
 from glassmoon.models import Transcripts
@@ -31,6 +32,17 @@ async def ignore(_):
 
 
 class BootstrapTests(unittest.IsolatedAsyncioTestCase):
+    def test_compaction_omits_inline_attachments_and_signed_url_details(self):
+        compacted = compactable_turn([{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Two screenshots"},
+                {"type": "image", "url": "data:image/jpeg;base64,fixturebytes"},
+                {"type": "image", "url": "https://fixture.example/sensitive-path?token=temporary"},
+            ],
+        }])
+        self.assertEqual(compacted[0]["content"], "Two screenshots\n[image attachment]\n[image attachment from fixture.example]")
+
     async def test_agent_manages_only_operator_approved_shared_tools(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Transcripts(Path(folder, "agent.db"))
