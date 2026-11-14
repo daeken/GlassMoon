@@ -106,7 +106,11 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                     entered.set()
                     await resume.wait()
                     return {"message": {"role": "assistant", "content": "Remember the oldest turn"}}
-                return {"message": {"role": "assistant", "content": "ready"}}
+                return {
+                    "message": {"role": "assistant", "content": "ready"},
+                    "provider": params["provider"], "model": params.get("model", "chosen"),
+                    "provider_generation": 123,
+                }
 
             async def change(target, **params):
                 return await target.handle("set_model_preference", params, ignore, False)
@@ -131,6 +135,10 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("provider", auto["requirements"])
                 restored = await change(replacement, mode="default", expected_revision=2)
                 self.assertEqual(restored["requirements"]["provider"], "first")
+                self.assertEqual(
+                    restored["last_model"],
+                    {"revision": 10, "provider": "second", "model": "chosen", "generation": 123},
+                )
             self.assertEqual([params["provider"] for params in seen], ["first", "first", "second"])
             self.assertIn("Summarize", json.dumps(seen[0]["messages"]))
             self.assertIn("Remember the oldest turn", json.dumps(seen[1]["messages"]))

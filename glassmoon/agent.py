@@ -142,7 +142,10 @@ class Agent:
                 requirements["provider"] = provider
             if model:
                 requirements["model"] = model
-        return {"revision": revision, "mode": mode, "requirements": requirements}
+        return {
+            "revision": revision, "mode": mode, "requirements": requirements,
+            "last_model": self.transcripts.last_model(self.conversation),
+        }
 
     def tool_policy(self, state=None):
         revision, operator, agent = (
@@ -574,12 +577,16 @@ class Agent:
             result = within_reply_limit(
                 {"agent": self.identity, "revision": revision + 2, **reply}
             )
+            selected = None
+            if isinstance(reply.get("provider"), str) and isinstance(reply.get("model"), str):
+                selected = (reply["provider"], reply["model"], reply.get("provider_generation"))
             self.transcripts.append(
                 self.conversation,
                 revision,
                 user,
                 assistant,
                 receipt=(*key, result) if key is not None else None,
+                selected_model=selected,
             )
             return result
 

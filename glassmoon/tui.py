@@ -288,6 +288,10 @@ class Terminal:
         if "model" in requirements:
             selection += "/" + requirements["model"]
         self.log(window, f"Model preference {current['mode']} · {selection} · revision {current['revision']}")
+        last = current.get("last_model")
+        if last:
+            generation = f" #{last['generation']}" if last.get("generation") else ""
+            self.log(window, f"Last used {last['provider']}/{last['model']}{generation} at conversation revision {last['revision']}")
 
     async def list_tasks(self, agent=None, parent=None, status=None, before=None):
         async with self.task_list_lock:

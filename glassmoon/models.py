@@ -178,6 +178,11 @@ class Transcripts:
                 conversation TEXT PRIMARY KEY REFERENCES conversations(id),
                 revision INTEGER NOT NULL, mode TEXT NOT NULL, provider TEXT, model TEXT
             );
+            CREATE TABLE IF NOT EXISTS agent_last_model (
+                conversation TEXT PRIMARY KEY REFERENCES conversations(id),
+                revision INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+                generation INTEGER
+            );
         """)
 
     def close(self):
@@ -337,6 +342,13 @@ class Transcripts:
         ).fetchone()
         return row if row else (0, "default", None, None)
 
+    def last_model(self, identifier):
+        row = self.db.execute(
+            "SELECT revision, provider, model, generation FROM agent_last_model WHERE conversation=?",
+            (identifier,),
+        ).fetchone()
+        return dict(zip(("revision", "provider", "model", "generation"), row, strict=True)) if row else None
+
     def set_model_preference(self, identifier, expected, mode, provider, model):
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
@@ -387,7 +399,7 @@ class Transcripts:
             )
             return revision, operator, agent
 
-    def append(self, identifier, revision, *messages, receipt=None):
+    def append(self, identifier, revision, *messages, receipt=None, selected_model=None):
         with self.db:
             if not self.db.execute(
                 "UPDATE conversations SET revision = revision + ? WHERE id = ? AND revision = ?",
@@ -408,6 +420,13 @@ class Transcripts:
                     for index, item in enumerate(messages, revision)
                 ],
             )
+            if selected_model is not None:
+                self.db.execute(
+                    """INSERT INTO agent_last_model VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(conversation) DO UPDATE SET revision=excluded.revision,
+                           provider=excluded.provider, model=excluded.model, generation=excluded.generation""",
+                    (identifier, revision + len(messages), *selected_model),
+                )
             if receipt is not None:
                 task_id, attempt, reply = receipt
                 changed = self.db.execute(
