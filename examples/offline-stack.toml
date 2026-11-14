@@ -1,0 +1,21 @@
+broker = ["target/debug/glassmoon", "{socket}"]
+
+[[worker]]
+name = "models"
+command = ["{python}", "-m", "glassmoon.provider_router", "--socket", "{socket}"]
+
+[[worker]]
+name = "demo"
+command = ["{python}", "-m", "glassmoon.demo_provider", "--socket", "{socket}"]
+
+[[worker]]
+name = "tools.mailbox"
+command = ["{python}", "-m", "glassmoon.mailbox", "--socket", "{socket}", "--state", "{state}/tasks.db"]
+
+[[worker]]
+name = "agent.moon"
+command = ["{python}", "-m", "glassmoon.agent", "--socket", "{socket}", "--name", "moon", "--state", "{state}/moon.db"]
+
+[worker.probe]
+method = "info"
+expect = { agent = "moon" }

@@ -2,6 +2,19 @@
 
 GlassMoon is an agentic coding harness built around a local IPC broker. It supports live service replacement, persistent agent conversations, and capability-based model selection.
 
+## Start an offline stack
+
+The example manifest starts a broker, model router, offline provider, task mailbox, and agent in a fresh directory. Build the broker first. Omit `--smoke` to keep the stack up until Ctrl-C.
+
+```sh
+cargo build --locked
+uv sync --locked
+uv run --locked python -m glassmoon.stack examples/offline-stack.toml \
+  --state /tmp/glassmoon-my-test --smoke
+```
+
+The launcher checks registration and configured readiness probes, logs each child, and cleans up its own process groups on exit. It requires a new state directory and forwards only the environment entries listed in the manifest or needed for local execution. Use trusted manifests and commands.
+
 ## Chat with an agent
 
 Build the broker and install the Python dependencies. Choose a private socket directory and share the printed socket path across the terminals you use below.
