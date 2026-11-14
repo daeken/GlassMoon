@@ -48,7 +48,10 @@ class Wire:
             raise EOFError("Broker disconnected")
         if len(frame) > MAX_FRAME + 1 or not frame.endswith(b"\n"):
             raise ProtocolError("Invalid frame length or delimiter")
-        message = json.loads(frame)
+        try:
+            message = json.loads(frame)
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+            raise ProtocolError("Incoming frame is not valid JSON") from None
         if not isinstance(message, dict):
             raise ProtocolError("Expected a JSON object")
         return message

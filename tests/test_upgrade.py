@@ -12,7 +12,14 @@ from unittest.mock import AsyncMock, patch
 
 from glassmoon.agent import Agent
 from glassmoon.echo import METHODS
-from glassmoon.ipc import ProtocolError, RequestError, active_service, call, connect
+from glassmoon.ipc import (
+    ProtocolError,
+    RequestError,
+    Wire,
+    active_service,
+    call,
+    connect,
+)
 from glassmoon.models import Transcripts
 from glassmoon.release import release
 from glassmoon.service import method, serve
@@ -24,6 +31,14 @@ BROKER = Path(os.environ.get("GLASSMOON_BROKER", "target/debug/glassmoon"))
 
 
 class UpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wire_reports_malformed_json_as_protocol_error(self):
+        for frame in (b"not json\n", b'"\xff"\n', b"[" * 1500 + b"\n"):
+            reader = asyncio.StreamReader()
+            reader.feed_data(frame)
+            with self.assertRaises(ProtocolError) as invalid:
+                await Wire(reader, None).receive()
+            self.assertEqual(str(invalid.exception), "Incoming frame is not valid JSON")
+
     async def test_terminal_health_pins_generation_and_flags_identity_mismatch(self):
         async with AsyncExitStack() as stack, asyncio.timeout(10):
             socket = await self.start_broker(stack, 5000)
