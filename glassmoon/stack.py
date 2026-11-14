@@ -2,10 +2,12 @@
 
 import argparse
 import asyncio
+import errno
 import fcntl
 import json
 import os
 import signal
+import stat
 import sys
 import tomllib
 from contextlib import AsyncExitStack, contextmanager
@@ -118,6 +120,31 @@ class Stack:
         stack.push_async_callback(stop, process)
         return process
 
+    async def recover_socket(self):
+        try:
+            previous = self.socket.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISSOCK(previous.st_mode) or previous.st_uid != os.getuid():
+            raise ValueError("The stack socket path must be an owned Unix socket")
+        try:
+            async with asyncio.timeout(2):
+                _, writer = await asyncio.open_unix_connection(self.socket)
+        except OSError as error:
+            if error.errno not in (errno.ECONNREFUSED, errno.ENOENT):
+                raise
+        else:
+            writer.close()
+            await writer.wait_closed()
+            raise RuntimeError("A broker is already listening at this stack socket")
+        try:
+            current = self.socket.lstat()
+        except FileNotFoundError:
+            return
+        if (current.st_dev, current.st_ino) != (previous.st_dev, previous.st_ino):
+            raise RuntimeError("The stack socket changed during recovery")
+        self.socket.unlink()
+
     async def readiness(self, process, service=None, probe=None):
         async with asyncio.timeout(self.timeout):
             while process.returncode is None:
@@ -165,6 +192,8 @@ class Stack:
     async def run(self, smoke):
         async with AsyncExitStack() as stack:
             stack.enter_context(self.state_lock())
+            if self.resume:
+                await self.recover_socket()
             processes = [
                 (
                     "broker",

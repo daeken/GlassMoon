@@ -1,5 +1,6 @@
 import asyncio
 import json
+import socket
 import sys
 import unittest
 from pathlib import Path
@@ -100,6 +101,10 @@ class StackTests(unittest.IsolatedAsyncioTestCase):
                     first.terminate()
                     self.assertEqual(await first.wait(), 0)
                     self.assertFalse(Path(a).exists())
+                    # Reproduce the stale pathname a broker leaves after an abrupt exit.
+                    with socket.socket(socket.AF_UNIX) as stale:
+                        stale.bind(a)
+                        stale.listen()
                     _, restored = await start(Path(root) / "a", "--resume")
                     self.assertEqual(restored, a)
                     self.assertEqual(
