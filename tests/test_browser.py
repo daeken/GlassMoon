@@ -176,6 +176,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RequestError) as ambiguous:
             await worker.invoke("element", save)
         self.assertEqual(ambiguous.exception.code, "ambiguous_target")
+        sequence = await worker.invoke("actions", a | {"steps": [
+            {"action": "element", "operation": "fill", "by": "placeholder", "name": "Note", "text": "unsaved check"},
+            {"action": "element", "operation": "click", "by": "role", "role": "button", "name": "Save"},
+            {"action": "element", "operation": "fill", "by": "placeholder", "name": "Note", "text": "should not run"},
+        ]})
+        self.assertEqual((sequence["completed"], sequence["reason"]), (1, "ambiguous_target"))
+        value = await worker.invoke("evaluate", a | {"script": "document.querySelector('#note').value"})
+        self.assertEqual(value["result"], "unsaved check")
         self.assertEqual(
             (
                 await worker.invoke(

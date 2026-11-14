@@ -22,6 +22,7 @@ TIMEOUT = 10_000
 
 WINDOW = {"window": TEXT}
 POSITION = {"x": INTEGER, "y": INTEGER}
+ACTION_STEPS = ("click", "type_text", "press", "scroll", "element", "wait_for")
 TOOLS = {
     "open": tool(
         "Open an isolated browser window. Returns the window handle.",
@@ -82,7 +83,8 @@ TOOLS = {
         WINDOW | {"dx": INTEGER, "dy": INTEGER},
     ),
     "actions": tool(
-        "Run up to eight ordered viewport actions in one window. Each item has action (click, type_text, press, or scroll) and its usual arguments.",
+        "Run up to eight ordered steps in one window. Each item has action (click, type_text, press, scroll, element, or wait_for) and its usual arguments. "
+        "For an element step use operation=click or operation=fill plus the element target fields. Stops at the first error and reports how many steps completed.",
         WINDOW | {"steps": ARRAY | {"items": {"type": "object"}}},
     ),
     "close": tool("Close only the browser window identified by this handle.", WINDOW),
@@ -302,41 +304,7 @@ class Browser:
                             }
                         )
                     if action == "actions":
-                        steps = args["steps"]
-                        if (
-                            not isinstance(steps, list)
-                            or not 1 <= len(steps) <= 8
-                            or any(
-                                not isinstance(step, dict)
-                                or step.get("action")
-                                not in ("click", "type_text", "press", "scroll")
-                                for step in steps
-                            )
-                        ):
-                            raise fail(
-                                "invalid_actions",
-                                "Supply one to eight viewport actions",
-                            )
-                        completed = []
-                        for step in steps:
-                            try:
-                                completed.append(
-                                    await self.page_action(step["action"], page, step)
-                                )
-                            except (
-                                RequestError,
-                                ValueError,
-                                KeyError,
-                                Error,
-                                TypeError,
-                            ):
-                                return {
-                                    "completed": len(completed),
-                                    "error": "action_failed",
-                                    "action": step["action"],
-                                    "url": page.url,
-                                }
-                        return {"completed": len(completed), "url": page.url}
+                        return await self.actions(page, args["steps"])
                     return await self.page_action(action, page, args)
         except (TimeoutError, BrowserTimeout):
             raise fail(
@@ -439,6 +407,48 @@ class Browser:
             case _:
                 raise fail("unknown_tool", "Unknown browser action")
         return {"url": page.url, "action": action}
+
+    async def actions(self, page, steps):
+        if (
+            not isinstance(steps, list)
+            or not 1 <= len(steps) <= 8
+            or any(
+                not isinstance(step, dict)
+                or step.get("action") not in ACTION_STEPS
+                or (
+                    step["action"] == "element"
+                    and step.get("operation") not in ("click", "fill")
+                )
+                for step in steps
+            )
+        ):
+            raise fail("invalid_actions", "Supply one to eight supported browser steps")
+        completed = 0
+        try:
+            async with asyncio.timeout(24):
+                for step in steps:
+                    action = step["action"]
+                    params = (
+                        step | {"action": step["operation"]}
+                        if action == "element"
+                        else step
+                    )
+                    await self.page_action(action, page, params)
+                    completed += 1
+        except (RequestError, ValueError, KeyError, Error, TypeError, TimeoutError) as error:
+            reason = "browser_error"
+            if isinstance(error, RequestError):
+                reason = error.code
+            elif isinstance(error, (TimeoutError, BrowserTimeout)):
+                reason = "browser_timeout"
+            return {
+                "completed": completed,
+                "error": "action_failed",
+                "reason": reason,
+                "action": action,
+                "url": page.url,
+            }
+        return {"completed": completed, "url": page.url}
 
     async def element(self, page, args):
         action, by, name = args["action"], args["by"], args["name"]
