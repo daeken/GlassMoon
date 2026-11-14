@@ -15,8 +15,9 @@ class ProtocolError(Exception):
 class RequestError(Exception):
     """The broker or service rejected a request."""
 
-    def __init__(self, error):
+    def __init__(self, error, *, generation=None):
         self.code = error["code"]
+        self.generation = generation
         super().__init__(error["message"])
 
 
@@ -58,7 +59,7 @@ class Wire:
         if message.get("type") != "response" or message.get("id") != request_id:
             raise ProtocolError(f"Expected a response to {request_id!r}")
         if message["status"] == "error":
-            raise RequestError(message["error"])
+            raise RequestError(message["error"], generation=message.get("generation"))
         return message
 
 
@@ -100,7 +101,9 @@ async def call(
                 await on_chunk(message["data"])
             elif message["type"] == "response":
                 if message["status"] == "error":
-                    raise RequestError(message["error"])
+                    raise RequestError(
+                        message["error"], generation=message.get("generation")
+                    )
                 return message["result"]
             else:
                 raise ProtocolError("Unexpected call response")

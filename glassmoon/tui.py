@@ -6,6 +6,7 @@ import curses
 import json
 import textwrap
 import unicodedata
+import uuid
 from collections import deque
 
 from .ipc import ProtocolError, RequestError, call, connect
@@ -229,6 +230,23 @@ class Terminal:
         await call_tool(self.socket, self.mailbox, "reconcile", {"id": identifier})
         await self.show_task(identifier)
 
+    async def queue_task(self, agent, instruction):
+        task = await call_tool(
+            self.socket,
+            self.mailbox,
+            "submit",
+            {
+                "sender": "operator",
+                "agent": agent,
+                "key": uuid.uuid4().hex,
+                "task": instruction,
+            },
+        )
+        self.log(
+            "status",
+            f"Queued {task['id']} for {agent}. Use /task {task['id']} to check it.",
+        )
+
     def start(self, operation, window="status"):
         async def run():
             try:
@@ -274,7 +292,10 @@ class Terminal:
                         self.active,
                         "F2 switches windows. Page Up and Page Down scroll. // sends a slash.",
                     )
-                    self.log(self.active, "/tasks [AGENT]  /task ID  /reconcile ID")
+                    self.log(
+                        self.active,
+                        "/queue AGENT TASK  /tasks [AGENT]  /task ID  /reconcile ID",
+                    )
                 case "/status":
                     self.select("status")
                 case "/compact" if self.active != "status":
@@ -286,6 +307,14 @@ class Terminal:
                 case "/tasks":
                     self.select("status")
                     self.start(lambda: self.list_tasks(argument.removeprefix("agent.")))
+                case "/queue" if " " in argument:
+                    agent, _, instruction = argument.partition(" ")
+                    self.select("status")
+                    self.start(
+                        lambda: self.queue_task(
+                            agent.removeprefix("agent."), instruction.strip()
+                        )
+                    )
                 case "/task" if argument:
                     self.select("status")
                     self.start(lambda: self.show_task(argument))

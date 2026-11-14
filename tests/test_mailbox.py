@@ -185,3 +185,53 @@ class MailboxTests(unittest.IsolatedAsyncioTestCase):
             await agent.handle("run_task", params, emit, False)
         self.assertEqual(caught.exception.code, "task_uncertain")
         self.assertEqual(store.history("tide")["revision"], 0)
+
+    async def test_dispatcher_preserves_ambiguity_of_admitted_errors(self):
+        task = self.rpc("submit", **TASK)
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+
+        async def route(method, fields):
+            return self.rpc(method, **fields)
+
+        async def agent(_socket, _service, method, _params):
+            if method == "task_receipt":
+                return {"status": "started"}
+            raise RequestError(
+                {"code": "unavailable", "message": "Tool stopped"}, generation=3
+            )
+
+        with (
+            patch.object(dispatcher, "online", AsyncMock(return_value=True)),
+            patch.object(dispatcher, "rpc", side_effect=route),
+            patch("glassmoon.dispatcher.call", side_effect=agent),
+            patch("glassmoon.dispatcher.asyncio.sleep", AsyncMock()),
+        ):
+            result = await dispatcher.deliver()
+        self.assertEqual(result["status"], "review")
+        self.assertEqual(self.rpc("get", id=task["id"])["attempts"], 1)
+
+    async def test_dispatcher_recovers_completed_receipt_before_expiry(self):
+        task = self.rpc("submit", **TASK)
+        dispatcher = Dispatch("", "tools.mailbox", "tide")
+        methods = []
+
+        async def route(method, fields):
+            return self.rpc(method, **fields)
+
+        async def agent(_socket, _service, method, _params):
+            methods.append(method)
+            if method == "run_task":
+                raise EOFError
+            return {"status": "done", "reply": {"message": {"content": "Saved once"}}}
+
+        with (
+            patch.object(dispatcher, "online", AsyncMock(return_value=True)),
+            patch.object(dispatcher, "rpc", side_effect=route),
+            patch("glassmoon.dispatcher.call", side_effect=agent),
+        ):
+            done = await dispatcher.deliver()
+        self.assertEqual(methods, ["run_task", "task_receipt"])
+        self.assertEqual(
+            (done["id"], done["status"], done["result"]),
+            (task["id"], "done", "Saved once"),
+        )

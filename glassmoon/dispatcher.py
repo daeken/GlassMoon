@@ -12,7 +12,7 @@ from .toolbox import call_tool
 
 LEASE_SECONDS = 30
 CONNECTION_ERRORS = (ProtocolError, EOFError, OSError, TimeoutError)
-RETRYABLE_CHAT = {"agent_busy", "busy", "unavailable"}
+PRE_ADMISSION_ERRORS = {"busy", "unavailable"}
 
 
 class Dispatch:
@@ -44,6 +44,24 @@ class Dispatch:
             except RequestError:
                 return
 
+    async def recover_reply(self, task):
+        for attempt in range(3):
+            try:
+                async with asyncio.timeout(3):
+                    receipt = await call(
+                        self.socket,
+                        self.agent,
+                        "task_receipt",
+                        {"id": task["id"], "attempt": task["attempts"]},
+                    )
+                if receipt["status"] == "done":
+                    return receipt["reply"]
+            except (*CONNECTION_ERRORS, RequestError):
+                pass
+            if attempt < 2:
+                await asyncio.sleep(0.5)
+        return None
+
     async def deliver(self):
         if not await self.online():
             return None
@@ -62,6 +80,7 @@ class Dispatch:
         )
         heartbeat = asyncio.create_task(self.heartbeat(lease))
         try:
+            reply = None
             try:
                 async with asyncio.timeout(245):
                     try:
@@ -76,23 +95,33 @@ class Dispatch:
                             },
                         )
                     except RequestError as error:
-                        if error.code != "unknown_method":
+                        if (
+                            error.code != "unknown_method"
+                            or error.generation is not None
+                        ):
                             raise
                         reply = await call(
                             self.socket, self.agent, "chat", {"text": message}
                         )
+            except RequestError as error:
+                retryable = error.code == "agent_busy" or (
+                    error.generation is None and error.code in PRE_ADMISSION_ERRORS
+                )
+                status = "queued" if retryable else "review"
+                result = f"Agent call returned {error.code}."
+                if not retryable:
+                    reply = await self.recover_reply(task)
+            except CONNECTION_ERRORS as error:
+                status = "review"
+                result = f"Delivery interrupted ({type(error).__name__}). Verify any effects before retrying."
+                reply = await self.recover_reply(task)
+            if reply is not None:
                 status = "done"
                 result = (
                     result_text(reply["message"]["content"]).strip()
                     or "Agent returned an empty reply."
                 )
                 result = result.encode()[:12000].decode(errors="ignore")
-            except RequestError as error:
-                status = "queued" if error.code in RETRYABLE_CHAT else "review"
-                result = f"Agent call returned {error.code}."
-            except CONNECTION_ERRORS as error:
-                status = "review"
-                result = f"Delivery interrupted ({type(error).__name__}). Verify any effects before retrying."
             finish = lease | {"status": status, "result": result}
             for attempt in range(3):
                 try:
