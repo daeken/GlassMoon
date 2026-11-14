@@ -51,12 +51,35 @@ uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call openai add
 uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call openai respond '{"conversation":"YOUR_ID"}' --stream
 ```
 
+### Use DeepSeek or the Z.ai Coding Plan
+
+Load `DEEPSEEK_API_KEY` for DeepSeek or `ZAI_API_KEY` for the Z.ai account with an active Coding Plan in the provider's shell. The provider reads its key from the environment. Z.ai uses the dedicated Coding Plan endpoint. [DeepSeek API](https://api-docs.deepseek.com/api/create-chat-completion/) · [Z.ai Coding Plan endpoints](https://zcode.z.ai/en/docs/configuration)
+
+```sh
+uv run --locked python -m glassmoon.chat_provider deepseek --socket "$GLASSMOON_SOCKET"
+uv run --locked python -m glassmoon.chat_provider zai --socket "$GLASSMOON_SOCKET"
+```
+
+Run either or both in separate terminals. The router discovers them as `deepseek` and `zai`. `--catalog` overrides the built-in model descriptors. Start an agent with `--provider zai --model glm-5.3`, for example, to choose that subscription for its turns.
+
+### Give an agent workspace tools
+
+Start the agent with `--workspace` to let it read, create, and edit UTF-8 files in that directory. Add `--python-eval` to let it run raw Python expressions and statements. Keep the same name and state path and pass `--replace GENERATION` if the agent is already running.
+
+```sh
+uv run --locked python -m glassmoon.agent --socket "$GLASSMOON_SOCKET" \
+  --name moon --provider openai --workspace "$PWD" --python-eval
+```
+
+Raw Python runs as your local user in a fresh process with the workspace as its working directory. It can access anything your local user can access. File tools accept workspace-relative paths and check the last-read revision before overwriting. An agent with workspace tools selects models that advertise function calling. The TUI shows tool activity during streamed turns.
+
 ### Register another model provider
 
 Register a service with `kind: "model_provider"` and expose the `models` and `generate` methods. The [offline provider](glassmoon/demo_provider.py) is a complete example. Registration lasts as long as the provider has an active broker generation.
 
-- `models({})` returns `{"models": [...]}`. Each model declares `id`, `input_modalities`, `output_modalities`, `context_tokens`, and `streaming`. It may also declare `max_output_tokens`.
+- `models({})` returns `{"models": [...]}`. Each model declares `id`, `input_modalities`, `output_modalities`, `context_tokens`, and `streaming`. It may also declare `max_output_tokens` and `tool_calls`.
 - `generate({model, messages, output_modalities})` returns `{"message": {"role": "assistant", "content": [...]}}` and may include usage information. Streams emit content parts before the final response. Text parts use `{"type":"text","text":"..."}`. OpenAI also accepts user image and file parts with a `url`. Other providers define how their supported content parts are encoded.
+- A provider with `tool_calls: true` accepts `tools` with name, description, and a JSON Schema for parameters. A tool request includes `tool_calls` with `id`, `name`, and JSON-encoded `arguments`, plus optional provider-specific `tool_state`. On continuation, the caller pins the same provider and model and supplies `tool_history` exchanges containing `calls`, `outputs` keyed by call ID, optional assistant `text`, and the saved `state`.
 - The router exposes `models` and `generate`. A generation request supplies `messages` and may specify `input_modalities`, `output_modalities`, `min_context_tokens`, `provider`, or `model`. It picks the first compatible active provider and model in name order. It checks the message modalities and streaming requirement and includes the chosen provider and model in the reply. Each new turn can choose a different provider, which receives the supplied transcript.
 
 All services on this local socket are trusted. If multiple model providers can serve an agent, each selected provider can receive the agent's recent transcript. Pin the provider to restrict where that transcript goes.

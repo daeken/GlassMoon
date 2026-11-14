@@ -1,9 +1,11 @@
 """Provider-neutral model descriptors, conversation messages, and transcripts."""
 
+import fcntl
 import json
 import os
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from .functions import TOOL_FIELDS
@@ -141,6 +143,7 @@ class Transcripts:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
+        self.path = path.resolve()
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript("""
@@ -156,6 +159,18 @@ class Transcripts:
 
     def close(self):
         self.db.close()
+
+    @contextmanager
+    def agent_turn(self):
+        fd = os.open(f"{self.path}.turn", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise fail("agent_busy", "This agent is already replying") from None
+            yield
+        finally:
+            os.close(fd)
 
     def create(self, model=None, identifier=None):
         identifier = identifier or uuid.uuid4().hex

@@ -1,8 +1,10 @@
 """Persistent chat agent, exposed as a GlassMoon service."""
 
 import asyncio
+import json
 from pathlib import Path
 
+from . import functions
 from .ipc import ProtocolError, RequestError, call
 from .models import (
     INTEGER,
@@ -12,9 +14,11 @@ from .models import (
     encoded_size,
     message,
     modalities,
+    result_text,
     within_reply_limit,
 )
 from .service import fail, method, serve, service_args
+from .workspace_tools import Workspace
 
 METHODS = {
     "info": method("Show agent identity and model settings"),
@@ -29,15 +33,18 @@ METHODS = {
 
 STATE = Path.home() / ".local" / "state" / "glassmoon"
 TRANSCRIPT_BUDGET = 60 * 1024
+TOOL_BUDGET = 57 * 1024
+MAX_TOOL_ROUNDS = 6
+MAX_TOOL_CALLS = 16
 
 
-def turn_messages(instructions, history, user):
+def turn_messages(instructions, history, user, budget=TRANSCRIPT_BUDGET):
     developer = {
         "role": "developer",
         "content": [{"type": "text", "text": instructions}],
     }
     size = encoded_size([developer, user])
-    if size > TRANSCRIPT_BUDGET:
+    if size > budget:
         raise fail(
             "message_too_large",
             "The message and instructions exceed the agent input budget",
@@ -47,7 +54,7 @@ def turn_messages(instructions, history, user):
         turn_size = (
             encoded_size(history[start - 2]) + encoded_size(history[start - 1]) + 2
         )
-        if size + turn_size > TRANSCRIPT_BUDGET:
+        if size + turn_size > budget:
             break
         size += turn_size
         start -= 2
@@ -56,7 +63,14 @@ def turn_messages(instructions, history, user):
 
 class Agent:
     def __init__(
-        self, socket, identity, router, requirements, instructions, transcripts
+        self,
+        socket,
+        identity,
+        router,
+        requirements,
+        instructions,
+        transcripts,
+        workspace=None,
     ):
         self.socket = socket
         self.identity = identity
@@ -65,7 +79,77 @@ class Agent:
         self.instructions = instructions
         self.transcripts = transcripts
         self.conversation = transcripts.create(identifier=identity)
-        self.turn = asyncio.Lock()
+        self.workspace = workspace
+
+    async def generate(self, history, user, emit, stream):
+        workspace = self.workspace
+        requirements = self.requirements.copy()
+        rounds = []
+        used_ids = set()
+        for _ in range(MAX_TOOL_ROUNDS + 1):
+            params = dict(requirements)
+            budget = TRANSCRIPT_BUDGET
+            if workspace is not None:
+                params["tools"] = workspace.definitions
+                if rounds:
+                    params["tool_history"] = rounds
+                budget = TOOL_BUDGET - encoded_size(params)
+            params["messages"] = turn_messages(self.instructions, history, user, budget)
+            try:
+                reply = await call(
+                    self.socket,
+                    self.router,
+                    "generate",
+                    params,
+                    on_chunk=emit if stream else None,
+                )
+            except (EOFError, OSError):
+                raise fail(
+                    "model_unavailable", "Connection to the model router ended"
+                ) from None
+            announced = functions.calls(reply.get("tool_calls", []))
+            if not announced:
+                return reply
+            if workspace is None:
+                raise fail("tools_disabled", "This agent has no workspace tools")
+            if (
+                len(rounds) >= MAX_TOOL_ROUNDS
+                or len(used_ids) + len(announced) > MAX_TOOL_CALLS
+            ):
+                raise fail(
+                    "tool_limit",
+                    "The agent reached its workspace tool limit for this turn",
+                )
+            ids = {item["id"] for item in announced}
+            if ids & used_ids:
+                raise fail("duplicate_tool_call", "The provider reused a tool call ID")
+            used_ids.update(ids)
+            requirements.update(provider=reply["provider"], model=reply["model"])
+            exchange = {
+                "calls": announced,
+                "outputs": {},
+                "text": result_text(reply["message"]["content"]),
+                "state": reply.get("tool_state", {}),
+            }
+            rounds.append(exchange)
+            for item in announced:
+                if stream:
+                    await emit(
+                        {"type": "tool", "name": item["name"], "phase": "started"}
+                    )
+                result = await workspace.execute(item)
+                exchange["outputs"][item["id"]] = json.dumps(result, ensure_ascii=False)
+                if stream:
+                    await emit(
+                        {
+                            "type": "tool",
+                            "name": item["name"],
+                            "phase": "failed"
+                            if "error" in result or result.get("exit_code", 0)
+                            else "finished",
+                        }
+                    )
+        raise AssertionError("Tool loop exhausted")
 
     async def handle(self, name, params, emit, stream):
         if name == "info":
@@ -73,13 +157,12 @@ class Agent:
                 "agent": self.identity,
                 "service": self.router,
                 "requirements": self.requirements,
+                "tools": self.workspace.names if self.workspace else [],
             }
         if name == "history":
             return self.transcripts.history(self.conversation, params.get("before"))
         if name != "chat":
             raise fail("unknown_method", "Unknown agent method")
-        if self.turn.locked():
-            raise fail("agent_busy", "This agent is already replying")
         if (
             set(params) == {"text"}
             and isinstance(params["text"], str)
@@ -93,23 +176,9 @@ class Agent:
                 "invalid_message", "Supply nonempty text or a message with role user"
             )
         within_reply_limit(user)
-        async with self.turn:
+        with self.transcripts.agent_turn():
             _, revision, history = self.transcripts.read(self.conversation)
-            try:
-                reply = await call(
-                    self.socket,
-                    self.router,
-                    "generate",
-                    {
-                        **self.requirements,
-                        "messages": turn_messages(self.instructions, history, user),
-                    },
-                    on_chunk=emit if stream else None,
-                )
-            except (EOFError, OSError):
-                raise fail(
-                    "model_unavailable", "Connection to the model router ended"
-                ) from None
+            reply = await self.generate(history, user, emit, stream)
             assistant = message(reply["message"])
             result = within_reply_limit(
                 {"agent": self.identity, "revision": revision + 2, **reply}
@@ -146,6 +215,9 @@ async def run(args):
             requirements,
             args.instructions,
             transcripts,
+            Workspace(args.workspace, python=args.python_eval)
+            if args.workspace
+            else None,
         )
         await serve(
             args.socket, f"agent.{identity}", args.replace, METHODS, agent.handle
@@ -172,6 +244,14 @@ def main():
         help="Comma-separated allowed response modalities",
     )
     parser.add_argument("--min-context-tokens", type=int, default=1)
+    parser.add_argument(
+        "--workspace", help="Directory where the agent can read and edit files"
+    )
+    parser.add_argument(
+        "--python-eval",
+        action="store_true",
+        help="Enable raw Python execution for a trusted agent",
+    )
     parser.add_argument("--state", help="Path to the agent's SQLite state")
     parser.add_argument(
         "--instructions", default="You are an agent in the GlassMoon coding harness."
@@ -180,6 +260,8 @@ def main():
         args = parser.parse_args()
         if args.min_context_tokens < 1:
             parser.error("--min-context-tokens must be positive")
+        if args.python_eval and not args.workspace:
+            parser.error("--python-eval requires --workspace")
         asyncio.run(run(args))
     except KeyboardInterrupt:
         return 130

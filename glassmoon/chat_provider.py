@@ -274,12 +274,16 @@ class ChatProvider:
                     raise fail(
                         "provider_protocol", "Provider sent invalid JSON"
                     ) from None
-                await completion.receive(event, emit)
+                await completion.receive(event, discard)
         except httpx.RequestError:
             raise fail(
                 "provider_connection", "The connection to the model provider failed"
             ) from None
         return completion.result()
+
+
+async def discard(_):
+    pass
 
 
 def check_status(response):
