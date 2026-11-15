@@ -134,6 +134,15 @@ Use `workspace_diff` to review one UTF-8 file of up to 128 KiB against `HEAD` or
 
 Add `--workspace-read-only` for a reviewer that needs directory listings, file contents, and search. This flag controls the built-in workspace tools. The agent's separately configured tool services retain their own capabilities.
 
+To offer Python execution as a shared tool, start the toolbox from the intended working directory and add `--tool-service tools.python` to each agent that should have access. The model sees `tools_python__python_eval`. The child interpreter receives `GLASSMOON_SOCKET` so it can call other local services.
+
+```sh
+GLASSMOON_SOCKET="$GLASSMOON_SOCKET" uv run --locked python -m glassmoon.toolbox \
+  --socket "$GLASSMOON_SOCKET" --name tools.python examples/python_tools.py
+```
+
+In a stack manifest, set the worker's `env` to `{ GLASSMOON_SOCKET = "{socket}" }`.
+
 Use `edit_file_batch` for up to eight exact replacements within one file revision. The edits run in order, and the file is written only after all replacements match.
 
 ### Register another model provider
