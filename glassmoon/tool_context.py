@@ -21,6 +21,28 @@ def excerpt(text, length):
     return text if len(text) <= length else text[:length] + "…"
 
 
+def retrieved_pages(exchange, tool_name):
+    pages = []
+    for item in exchange["calls"]:
+        if item["name"] != tool_name:
+            continue
+        try:
+            output = json.loads(exchange["outputs"][item["id"]])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        page = output.get("value", {})
+        if page.get("status") == "recorded":
+            pages.append(page)
+    return pages
+
+
+def page_excerpt(page, length):
+    text = page["text"][:length]
+    if len(text) == len(page["text"]):
+        return page
+    return page | {"text": text, "next_offset": page["offset"] + len(text)}
+
+
 class ToolContext:
     def __init__(self, store, conversation):
         self.store = store
