@@ -156,6 +156,19 @@ class Transcripts:
                 conversation TEXT PRIMARY KEY REFERENCES conversations(id),
                 through_revision INTEGER NOT NULL, summary TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS compaction_checkpoints (
+                conversation TEXT NOT NULL REFERENCES conversations(id),
+                through_revision INTEGER NOT NULL, source_from INTEGER NOT NULL,
+                snapshot_revision INTEGER, summary TEXT NOT NULL,
+                PRIMARY KEY (conversation, through_revision)
+            );
+            INSERT OR IGNORE INTO compaction_checkpoints
+                (conversation, through_revision, source_from, snapshot_revision, summary)
+                SELECT conversation, through_revision, 1, NULL, summary FROM compactions
+                WHERE through_revision > 0 AND NOT EXISTS (
+                    SELECT 1 FROM compaction_checkpoints
+                    WHERE compaction_checkpoints.conversation = compactions.conversation
+                );
             CREATE TABLE IF NOT EXISTS messages (
                 conversation TEXT NOT NULL REFERENCES conversations(id),
                 position INTEGER NOT NULL, value TEXT NOT NULL,
@@ -247,7 +260,18 @@ class Transcripts:
         if row is None:
             raise fail("unknown_conversation", "Conversation does not exist")
         revision, through, summary = row
-        return {"revision": revision, "through_revision": through, "summary": summary}
+        rows = self.db.execute(
+            """SELECT source_from, through_revision, snapshot_revision FROM compaction_checkpoints
+               WHERE conversation=? AND through_revision<=? ORDER BY through_revision DESC LIMIT 8""",
+            (identifier, through),
+        )
+        return {
+            "revision": revision, "through_revision": through, "summary": summary,
+            "checkpoints": [
+                {"source_from": start, "through_revision": end, "snapshot_revision": snapshot}
+                for start, end, snapshot in rows
+            ],
+        }
 
     def context(self, identifier):
         snapshot = self.db.execute(
@@ -269,6 +293,8 @@ class Transcripts:
         )
 
     def compact(self, identifier, revision, previous, through, summary):
+        if not 0 <= previous < through <= revision or (through - previous) % 2:
+            raise fail("invalid_compaction_range", "Compact a contiguous range of complete turns")
         with self.db:
             changed = self.db.execute(
                 """INSERT INTO compactions (conversation, through_revision, summary)
@@ -282,6 +308,12 @@ class Transcripts:
                 raise fail(
                     "conversation_changed", "Conversation changed during compaction"
                 )
+            self.db.execute(
+                """INSERT INTO compaction_checkpoints
+                   (conversation, through_revision, source_from, snapshot_revision, summary)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (identifier, through, previous + 1, revision, summary),
+            )
 
     def history(self, identifier, before=None):
         conversation = self.db.execute(

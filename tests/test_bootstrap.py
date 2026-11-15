@@ -398,7 +398,12 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 agent = Agent("", "moon", "models", {}, "instructions", store)
                 self.assertEqual(
                     await agent.handle("memory", {}, ignore, False),
-                    {"revision": 8, "through_revision": 4, "summary": "Remember user:0"},
+                    {
+                        "revision": 8, "through_revision": 4, "summary": "Remember user:0",
+                        "checkpoints": [
+                            {"source_from": 1, "through_revision": 4, "snapshot_revision": 8},
+                        ],
+                    },
                 )
                 with patch("glassmoon.agent.call", generate):
                     await agent.handle("chat", {"text": "continue"}, ignore, False)

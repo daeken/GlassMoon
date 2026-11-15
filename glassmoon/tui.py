@@ -341,7 +341,18 @@ class Terminal:
         if not through:
             self.log(window, "No conversation summary has been saved.")
             return
-        self.log(window, f"Saved summary through revision {through} of {memory['revision']}")
+        revision = memory["revision"]
+        self.log(window, f"Saved summary through revision {through} of {revision}")
+        tail = revision - through
+        if tail:
+            self.log(window, f"{tail} original messages follow the compacted prefix.")
+        for checkpoint in reversed(memory.get("checkpoints", [])):
+            source = f"{checkpoint['source_from']}–{checkpoint['through_revision']}"
+            snapshot = checkpoint["snapshot_revision"]
+            if snapshot is None:
+                self.log(window, f"Imported earlier summary covering message revisions {source}.")
+            else:
+                self.log(window, f"Checkpoint added message revisions {source} at revision {snapshot}.")
         self.log(window, memory["summary"])
 
     async def tool_status(self, window):

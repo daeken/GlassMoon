@@ -164,7 +164,7 @@ Agent chats and mailbox tasks have no total tool-round cap or whole-run timeout.
 
 Agent state keeps the full transcript in SQLite and a separate summary of older complete turns. Agents compact automatically when their unsummarized transcript grows. Use `/compact` in an agent chat or the `compact` RPC to request it explicitly. Use `info` to inspect the covered revision.
 
-If a model returns an oversized summary, compaction tries once more with a shorter prompt. `/memory` shows the last accepted summary and `/find` can search the original messages for exact details.
+If a model returns an oversized summary, compaction tries once more with a shorter prompt. `/memory` shows the last accepted summary and recent checkpoint source ranges. `/find` searches the original messages for exact details. The agent defaults to compacting above 26,112 encoded transcript bytes and retains the newest two complete turns. Set `GLASSMOON_COMPACTION_TRIGGER_BYTES` or `GLASSMOON_COMPACTION_RETAIN_TURNS` in the agent's environment to change either value. `/compact` skips the size trigger and still preserves the configured tail.
 
 ```sh
 uv run --locked python -m glassmoon --socket "$GLASSMOON_SOCKET" call agent.moon compact
