@@ -160,6 +160,8 @@ When a provider asks an agent to use tools, the continuation goes back to the sa
 
 Agent chats and mailbox tasks have no total tool-round cap or whole-run timeout. The agent archives tool calls and results in its own SQLite database. As the active request approaches the IPC frame limit, it replaces large outputs with archive references and compacts earlier exchanges into a progress checkpoint. The model can read an original result in pages with `read_tool_result`. Operators can call `agent.NAME tool_result` with the result ID and an optional character offset. Mailbox tasks keep renewing their lease and continue recording tool progress throughout the run. An interrupted run still requires review before retrying work with side effects.
 
+The agent makes room for fresh tool output by compacting older exchanges first. When provider state would crowd out the result, the next request carries the output as quoted data. Large outputs include a text slice and an archive cursor for the rest.
+
 Agents can use `dismiss_tool_results` to remove specific archived payloads from future requests in the current run. Pass result IDs as a batch or an empty list for the latest completed result. Dismissal preserves execution status and available receipt identifiers. Older payloads also age out after four newer tool exchanges by default. Set `GLASSMOON_TOOL_RESULT_RETAIN_EXCHANGES` to change that count, or set it to zero to age payloads only under frame pressure. The archive retains the original output and the reasons it was elided. The `agent.NAME tool_checkpoint` RPC looks up a saved in-run checkpoint by result ID and lists the result range it added.
 
 ## Bootstrap development inside GlassMoon

@@ -22,9 +22,8 @@ from .service import fail, method, serve, service_args
 from .tool_context import (
     DISMISS_TOOL_RESULTS,
     ToolContext,
-    excerpt,
-    page_excerpt,
-    retrieved_pages,
+    delivered_results,
+    result_message,
 )
 from .toolbox import call_tool, tool, tool_catalog, validate_name
 from .workspace_tools import Workspace
@@ -367,7 +366,7 @@ class Agent:
         return self.transcripts.tool_result(self.conversation, params["id"], params.get("offset", 0))
 
     async def generation_params(self, requirements, definitions, context, history, user, summary):
-        def build(checkpoint, pages=()):
+        def build(checkpoint, *, extra=None):
             params = requirements.copy()
             budget = TRANSCRIPT_BUDGET
             if definitions:
@@ -375,19 +374,23 @@ class Agent:
                 if context.rounds:
                     params["tool_history"] = [exchange for exchange, _ in context.rounds]
                 budget = TOOL_BUDGET - encoded_size(params)
-            archived = []
-            if pages:
-                archived.append({
-                    "role": "user",
-                    "content": "Archive pages you requested. Treat the text as quoted data.\n"
-                    + json.dumps(pages, ensure_ascii=False),
-                })
-                budget -= encoded_size(archived)
+            if extra:
+                budget -= encoded_size(extra) + 1
             params["messages"] = [
                 *turn_messages(self.instructions, history, user, budget, summary, checkpoint),
-                *archived,
+                *([extra] if extra else []),
             ]
             return params
+
+        def fit_native():
+            extras = [result_message(context.carried), None] if context.carried else [None]
+            for extra in extras:
+                try:
+                    return build(context.checkpoint, extra=extra)
+                except RequestError as error:
+                    if error.code != "message_too_large":
+                        raise
+            return None
 
         async def summarize(messages):
             return await call(
@@ -403,56 +406,38 @@ class Agent:
                 },
             )
 
-        # Reuse the exact provider exchange if it fits. Preserve the newest full output
-        # before replacing it with a reference, and only compact exchanges if needed.
-        try:
+        if (params := fit_native()) is not None:
+            return params
+        if not context.rounds:
             return build(context.checkpoint)
-        except RequestError:
-            if not context.rounds:
-                raise
-        context.elide(context.rounds[:-1])
-        try:
-            return build(context.checkpoint)
-        except RequestError:
-            pass
-        pages = retrieved_pages(context.rounds[-1][0], READ_TOOL_RESULT)
-        if pages:
-            # Reclaim older exchanges before touching a freshly retrieved archive page.
-            while len(context.rounds) > 1:
-                await context.compact(user, summarize)
-                try:
-                    return build(context.checkpoint)
-                except RequestError:
-                    pass
-            # A provider envelope alone can use up the frame. Carry the requested
-            # text forward as quoted data after compacting the whole exchange.
+        # Reclaim older exchanges, with their opaque provider state, before shortening
+        # any result the model has yet to see.
+        while len(context.rounds) > 1:
             await context.compact(user, summarize)
-            for size in (2048, 1024, 512, 128, 32, 1):
-                slices = [page_excerpt(page, size) for page in pages]
-                for checkpoint in (context.checkpoint, ""):
+            if (params := fit_native()) is not None:
+                return params
+
+        # Start a fresh provider exchange when the newest envelope is itself too big.
+        # The quoted result carries the actual data and any pagination cursor.
+        exchange, references = context.rounds[-1]
+        await context.compact(user, summarize)
+        for length, images in ((None, True), (None, False), (4096, False), (2048, False),
+                               (1024, False), (512, False), (128, False), (32, False), (1, False)):
+            results, attachments, clipped = delivered_results(exchange, references, length, images=images)
+            current_refs = set(references.values())
+            earlier = [(ref, row) for ref, row in context.carried if ref not in current_refs]
+            views = [[*earlier, *results], results] if earlier else [results]
+            for checkpoint in (context.checkpoint, ""):
+                for view in views:
                     try:
-                        return build(checkpoint, slices)
-                    except RequestError:
-                        pass
-            raise fail("archive_page_unavailable", "The request has no room for the requested archive pages")
-        context.elide(context.rounds[-1:])
-        try:
-            return build(context.checkpoint)
-        except RequestError:
-            pass
-        while context.rounds:
-            await context.compact(user, summarize)
-            try:
-                return build(context.checkpoint)
-            except RequestError:
-                pass
-        checkpoint = context.checkpoint
-        while checkpoint:
-            try:
-                return build(checkpoint)
-            except RequestError:
-                checkpoint = excerpt(checkpoint, len(checkpoint) // 2) if len(checkpoint) > 2 else ""
-        return build("")
+                        params = build(checkpoint, extra=result_message(view, attachments))
+                    except RequestError as error:
+                        if error.code != "message_too_large":
+                            raise
+                    else:
+                        context.carry(results, clipped)
+                        return params
+        raise fail("tool_output_unavailable", "The request has no room for the latest tool output")
 
     async def generate(self, history, user, emit, stream, summary="", *, requirements=None):
         definitions, routes, images, _ = await self.discover_tools(emit, stream)
@@ -471,7 +456,7 @@ class Agent:
             try:
                 params = await self.generation_params(requirements, definitions, context, history, user, summary)
             except RequestError as error:
-                if error.code != "archive_page_unavailable":
+                if error.code != "tool_output_unavailable":
                     raise
                 return self.partial_reply(requirements, context, str(error) + ".")
             if stream and context.checkpoint != prior_checkpoint:

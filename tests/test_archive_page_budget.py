@@ -5,15 +5,91 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+import httpx
 
 from glassmoon import functions
 from glassmoon.agent import READ_TOOL_RESULT, RESULT_READER, TOOL_BUDGET, Agent
 from glassmoon.models import Transcripts, encoded_size
+from glassmoon.openai_service import OpenAI
+from glassmoon.provider_router import Router
 from glassmoon.tool_context import DISMISS_TOOL_RESULTS, ToolContext
 
 
 class ArchivePageBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_openai_receives_python_output_and_archive_text_under_pressure(self):
+        model = {
+            "id": "fixture", "input_modalities": ["text"], "output_modalities": ["text"],
+            "context_tokens": 100_000, "streaming": True, "tool_calls": True,
+        }
+        marker = "Original source text for result 958."
+        specifications = [{
+            "name": "python_eval", "description": "fixture schema " * 430,
+            "parameters": {"type": "object"},
+        }]
+        requests = 0
+
+        def upstream(request):
+            nonlocal requests
+            body = json.loads(request.content)
+            data = json.dumps(body["input"], ensure_ascii=False)
+            if "tools" not in body:
+                output = [{"type": "message", "content": [{"type": "output_text", "text": "Continue verifying."}]}]
+            else:
+                requests += 1
+                if requests == 2:
+                    self.assertIn("first tool output", data)
+                if requests in (3, 4):
+                    self.assertIn(marker, data)
+                    self.assertNotIn("Earlier archive page, offset 0", data)
+                if requests == 4:
+                    self.assertIn("second tool output", data)
+                    output = [{"type": "message", "content": [{"type": "output_text", "text": "Both outputs verified."}]}]
+                else:
+                    name = READ_TOOL_RESULT if requests == 2 else "tools_fixture__python_eval"
+                    args = {"id": 958, "offset": 0} if requests == 2 else {"code": str(requests)}
+                    output = [
+                        {"type": "reasoning", "encrypted_content": "r" * (55_000 if requests == 3 else 39_000)},
+                        {"type": "function_call", "name": name, "call_id": f"call-{requests}", "arguments": json.dumps(args)},
+                    ]
+            event = {"type": "response.completed", "response": {"output": output}}
+            return httpx.Response(200, content=f"data: {json.dumps(event)}\n\n")
+
+        async def ignore(_):
+            pass
+
+        with tempfile.TemporaryDirectory() as folder, closing(Transcripts(Path(folder, "agent.db"))) as store:
+            agent = Agent("", "moon", "models", {}, "", store, tool_services=["tools.fixture"])
+            with store.db:
+                store.db.execute(
+                    "INSERT INTO agent_tool_results VALUES (958, ?, ?, ?, ?, ?, ?)",
+                    ("moon", "original-run", "file", "read_file", "{}", json.dumps({"text": marker})),
+                )
+            async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+                provider = OpenAI(Mock(access_token=Mock(return_value="fixture-token")), client, [model], store)
+                router = Router("")
+                catalogs = ([model | {"provider": "openai", "provider_generation": 23, "interface_version": 1}], [])
+
+                async def ipc(_socket, service, name, params, **_kwargs):
+                    self.assertLessEqual(encoded_size(params), TOOL_BUDGET + 1024)
+                    handler = router if service == "models" else provider
+                    return await handler.handle(name, params, ignore, False)
+
+                with (
+                    patch.object(router, "models", AsyncMock(return_value=catalogs)),
+                    patch("glassmoon.provider_router.call", side_effect=ipc),
+                    patch("glassmoon.agent.call", side_effect=ipc),
+                    patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(4, specifications))),
+                    patch("glassmoon.agent.call_tool", AsyncMock(side_effect=[
+                        {"exit_code": 0, "output": "first tool output"},
+                        {"exit_code": 0, "output": "second tool output"},
+                    ])),
+                ):
+                    result = await agent.handle("chat", {"text": "Read the source and verify the tools."}, ignore, False)
+            self.assertEqual(requests, 4)
+            self.assertEqual(result["message"]["content"][0]["text"], "Both outputs verified.")
+
     async def test_page_survives_oversized_provider_state(self):
         with tempfile.TemporaryDirectory() as folder, closing(Transcripts(Path(folder, "moon.db"))) as store:
             agent = Agent("", "moon", "models", {}, "", store)

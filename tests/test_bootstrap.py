@@ -617,7 +617,9 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 "tool_calls": [{"id": "call", "name": "tools_fixture__note", "arguments": "{}"}],
             }
             final = {"message": {"role": "assistant", "content": "Finished"}}
-            model = AsyncMock(side_effect=[tool_reply, final])
+            model = AsyncMock(side_effect=[
+                tool_reply, {"message": {"role": "assistant", "content": "Progress"}}, final,
+            ])
             task = {"id": "f" * 32, "attempt": 1, "text": "Run the fixture"}
             with (
                 patch("glassmoon.agent.tool_catalog", AsyncMock(return_value=(14, catalog))),
@@ -627,8 +629,10 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
                 response = await agent.handle("run_task", task, ignore, False)
             self.assertEqual(response["message"], final["message"])
             self.assertEqual(store.revision("moon"), 2)
-            stub = model.await_args.args[3]["tool_history"][0]["outputs"]["call"]
-            self.assertIn("Archived tool result #1", stub)
+            delivered, = json.loads(model.await_args.args[3]["messages"][-1]["content"].split("\n", 1)[1])
+            self.assertEqual(delivered["id"], 1)
+            self.assertTrue(delivered["text"].startswith('{"value": {"note":'))
+            self.assertEqual(delivered["next_offset"], len(delivered["text"]))
             output = ""
             offset = 0
             while offset is not None:
