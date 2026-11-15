@@ -202,6 +202,18 @@ class Transcripts:
                 arguments TEXT NOT NULL, output TEXT,
                 UNIQUE (conversation, run, call_id)
             );
+            CREATE TABLE IF NOT EXISTS agent_tool_elisions (
+                result INTEGER NOT NULL REFERENCES agent_tool_results(id),
+                reason TEXT NOT NULL CHECK (reason IN ('explicit', 'age', 'budget')),
+                PRIMARY KEY (result, reason)
+            );
+            CREATE TABLE IF NOT EXISTS agent_tool_checkpoints (
+                conversation TEXT NOT NULL REFERENCES conversations(id), run TEXT NOT NULL,
+                source_from INTEGER NOT NULL REFERENCES agent_tool_results(id),
+                through_result INTEGER NOT NULL REFERENCES agent_tool_results(id),
+                summary TEXT NOT NULL,
+                PRIMARY KEY (conversation, run, through_result)
+            );
         """)
 
     def close(self):
@@ -426,6 +438,58 @@ class Transcripts:
                 (output if isinstance(output, str) else json.dumps(output, ensure_ascii=False), reference),
             )
 
+    def latest_tool_result(self, identifier, *, excluding):
+        row = self.db.execute(
+            """SELECT id FROM agent_tool_results
+               WHERE conversation=? AND output IS NOT NULL AND name<>? ORDER BY id DESC LIMIT 1""",
+            (identifier, excluding),
+        ).fetchone()
+        if row is None:
+            raise fail("unknown_result", "This agent has no completed tool result")
+        return row[0]
+
+    def record_tool_elisions(self, identifier, references, reason):
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            for reference in references:
+                if not self.db.execute(
+                    "SELECT 1 FROM agent_tool_results WHERE conversation=? AND id=? AND output IS NOT NULL",
+                    (identifier, reference),
+                ).fetchone():
+                    raise fail("unknown_result", f"Result #{reference} is absent or incomplete")
+                self.db.execute(
+                    "INSERT OR IGNORE INTO agent_tool_elisions (result, reason) VALUES (?, ?)",
+                    (reference, reason),
+                )
+
+    def record_tool_checkpoint(self, identifier, run, source_from, through, summary):
+        with self.db:
+            self.db.execute(
+                """INSERT INTO agent_tool_checkpoints VALUES (?, ?, ?, ?, ?)""",
+                (identifier, run, source_from, through, summary),
+            )
+
+    def tool_checkpoint(self, identifier, reference):
+        if type(reference) is not int or not 1 <= reference < 2**63:
+            raise fail("invalid_result_id", "Expected a positive tool result ID")
+        row = self.db.execute(
+            """SELECT checkpoint.source_from, checkpoint.through_result, checkpoint.summary
+               FROM agent_tool_results AS result LEFT JOIN agent_tool_checkpoints AS checkpoint
+                 ON checkpoint.conversation=result.conversation AND checkpoint.run=result.run
+                 AND result.id BETWEEN checkpoint.source_from AND checkpoint.through_result
+               WHERE result.conversation=? AND result.id=?""",
+            (identifier, reference),
+        ).fetchone()
+        if row is None:
+            raise fail("unknown_result", "This agent has no result with that ID")
+        start, through, summary = row
+        if through is None:
+            return {"id": reference, "status": "uncompacted"}
+        return {
+            "id": reference, "status": "compacted", "source_from": start,
+            "through_result": through, "summary": summary,
+        }
+
     def tool_result(self, identifier, reference, offset):
         # Limit each page before it is placed in an IPC response or a model request.
         page_size = 2048
@@ -443,11 +507,18 @@ class Transcripts:
         name, output = row
         if output is None:
             return {"id": reference, "tool": name, "status": "unconfirmed", "next_offset": None}
-        return {
+        page = {
             "id": reference, "tool": name, "status": "recorded", "offset": offset,
             "text": output[:page_size],
             "next_offset": offset + page_size if len(output) > page_size else None,
         }
+        elisions = self.db.execute(
+            "SELECT reason FROM agent_tool_elisions WHERE result=? ORDER BY reason", (reference,),
+        )
+        reasons = [reason for (reason,) in elisions]
+        if reasons:
+            page["elisions"] = reasons
+        return page
 
     def tool_policy(self, identifier):
         row = self.db.execute(

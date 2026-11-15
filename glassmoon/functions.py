@@ -6,8 +6,8 @@ from .service import fail
 
 TOOL_FIELDS = {"tools": {"type": "array"}, "tool_history": {"type": "array"}}
 MAX_AGENT_FUNCTIONS = 32
-# An agent can also offer a built-in reader for its archived tool results.
-MAX_FUNCTIONS = MAX_AGENT_FUNCTIONS + 1
+# Agents reserve two built-in tools for archive retrieval and dismissal.
+MAX_FUNCTIONS = MAX_AGENT_FUNCTIONS + 2
 
 
 DATA_IMAGE = re.compile(r"data:image/(?:jpeg|png);base64,[a-zA-Z0-9+/]+={0,2}")

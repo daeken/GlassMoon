@@ -19,7 +19,13 @@ from .models import (
     within_reply_limit,
 )
 from .service import fail, method, serve, service_args
-from .tool_context import ToolContext, excerpt, page_excerpt, retrieved_pages
+from .tool_context import (
+    DISMISS_TOOL_RESULTS,
+    ToolContext,
+    excerpt,
+    page_excerpt,
+    retrieved_pages,
+)
 from .toolbox import call_tool, tool, tool_catalog, validate_name
 from .workspace_tools import Workspace
 
@@ -58,6 +64,7 @@ METHODS = {
     "tool_result": method(
         "Read a page of an archived tool result", {"id": INTEGER}, {"offset": INTEGER}
     ),
+    "tool_checkpoint": method("Read the saved checkpoint that covered a tool result", {"id": INTEGER}),
 }
 
 LONG_RUNNING_METHODS = ("chat", "run_task")
@@ -71,6 +78,11 @@ READ_TOOL_RESULT = "read_tool_result"
 RESULT_READER = tool(
     "Read the original JSON text of an archived tool result. Start at offset=0 and follow next_offset.",
     {"id": INTEGER, "offset": INTEGER},
+)
+RESULT_DISMISSAL = tool(
+    "Remove archived payloads from this run's model context while preserving their original results. "
+    "Pass result IDs as a batch or use an empty list to dismiss the latest completed tool result.",
+    optional={"ids": {"type": "array", "items": INTEGER}},
 )
 SELF_TOOL_POLICY = "configure_shared_tool"
 SELF_TOOL = tool(
@@ -294,15 +306,19 @@ class Agent:
                     )
         return definitions, routes, images, status
 
-    async def execute(self, item, routes):
-        if item["name"] == READ_TOOL_RESULT:
+    async def execute(self, item, routes, context=None):
+        if item["name"] in (READ_TOOL_RESULT, DISMISS_TOOL_RESULTS):
             try:
                 params = json.loads(item["arguments"])
+                if item["name"] == DISMISS_TOOL_RESULTS:
+                    if context is None:
+                        raise fail("tool_context_required", "Dismiss results from an active tool run")
+                    return {"value": context.dismiss_results(params.get("ids"))}
                 return {"value": self.read_tool_result(params)}
             except RequestError as error:
                 return {"error": error.code, "message": str(error)}
             except (ValueError, TypeError, KeyError, AttributeError):
-                return {"error": "invalid_arguments", "message": "Supply a tool result ID and offset"}
+                return {"error": "invalid_arguments", "message": "Supply valid archive result arguments"}
         if self.self_tools and item["name"] == SELF_TOOL_POLICY:
             return self.configure_shared_tool(item["arguments"])
         if item["name"] in routes:
@@ -441,12 +457,16 @@ class Agent:
     async def generate(self, history, user, emit, stream, summary="", *, requirements=None):
         definitions, routes, images, _ = await self.discover_tools(emit, stream)
         if definitions:
-            definitions.append({"name": READ_TOOL_RESULT, **RESULT_READER})
+            definitions.extend([
+                {"name": READ_TOOL_RESULT, **RESULT_READER},
+                {"name": DISMISS_TOOL_RESULTS, **RESULT_DISMISSAL},
+            ])
         requirements = (self.requirements if requirements is None else requirements).copy()
         if images:
             requirements["tool_images"] = True
         context = ToolContext(self.transcripts, self.conversation)
         while True:
+            context.age()
             prior_checkpoint = context.checkpoint
             try:
                 params = await self.generation_params(requirements, definitions, context, history, user, summary)
@@ -484,7 +504,7 @@ class Agent:
                     await emit(
                         {"type": "tool", "name": item["name"], "phase": "started"}
                     )
-                result = await self.execute(item, routes)
+                result = await self.execute(item, routes, context)
                 value = result.get("value")
                 if (
                     item["name"] in images
@@ -621,6 +641,8 @@ class Agent:
             return {"status": "done", "reply": receipt["reply"]}
         if name == "tool_result":
             return self.read_tool_result(params)
+        if name == "tool_checkpoint":
+            return self.transcripts.tool_checkpoint(self.conversation, params["id"])
         if name == "tool_policy":
             return self.tool_policy()
         if name == "set_tool_policy":
